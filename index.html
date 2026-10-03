@@ -769,6 +769,7 @@ function dist(a,b){const R=6371000,r=Math.PI/180,dl=(b[0]-a[0])*r,dn=(b[1]-a[1])
   const h=Math.sin(dl/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(h));}
 const fmtD=d=>d>=1000?(d/1000).toFixed(2)+' km':Math.round(d)+' m';
 
+const VER=3;
 const ESRI='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
 function bearing(a,b){const r=Math.PI/180,dl=(b[1]-a[1])*r,y=Math.sin(dl)*Math.cos(b[0]*r),x=Math.cos(a[0]*r)*Math.sin(b[0]*r)-Math.sin(a[0]*r)*Math.cos(b[0]*r)*Math.cos(dl);return (Math.atan2(y,x)/r+360)%360;}
 const compass=b=>['north','north-east','east','south-east','south','south-west','west','north-west'][Math.round(b/45)%8];
@@ -844,9 +845,11 @@ function laptop(){
   peer.on('error',e=>{$('st').textContent='Connection problem: '+e.type+'. Reload to get a new code.';});
   peer.on('connection',c=>{
     conns.push(c);
-    c.on('open',()=>{$('st').textContent='Phone connected.';if(routeMsg)c.send(routeMsg);});
+    c.on('open',()=>{$('st').textContent='Phone connected.';c.send({type:'hello',v:VER});if(routeMsg)c.send(routeMsg);
+      setTimeout(()=>{if(!c.ver&&c.open)$('st').textContent='The phone is running an OLD version of this page. Upload the new file to GitHub, then reload the phone.';},4000);});
     c.on('data',m=>{
       if(!m)return;
+      if(m.type==='hello'){c.ver=m.v;return;}
       if(m.type==='pt'&&isFinite(m.lat)&&isFinite(m.lon)){
         add([m.lat,m.lon]);show();
         $('la').textContent='±'+Math.round(m.acc||0)+' m';
@@ -861,7 +864,7 @@ function laptop(){
 function phone(auto){
   $('start').classList.add('hide');$('phone').classList.remove('hide');
   if(auto)$('code').value=auto;
-  let conn=null,watch=null,last=null,total=0,n=0,peer=null,pm=null,rl=null,trail=null,me=null,route=[],firstFix=true;
+  let conn=null,watch=null,last=null,total=0,n=0,peer=null,pm=null,rl=null,trail=null,me=null,route=[],firstFix=true,cur=null,curAcc=0,gotHello=false;
   if(!window.isSecureContext)$('pst').textContent='This page is not https, so GPS will be blocked. Open the hosted https link on the phone, not a local file.';
   function initMap(){
     $('phone').classList.add('live');$('pmap').classList.remove('hide');$('guide').classList.remove('hide');
@@ -874,11 +877,13 @@ function phone(auto){
   function setRoute(a){
     route=a;rl.setLatLngs(a);
     if(a.length>1){pm.fitBounds(rl.getBounds(),{padding:[30,30]});firstFix=true;
+      let len=0;for(let i=0;i<a.length-1;i++)len+=dist(a[i],a[i+1]);
+      $('grem').textContent=fmtD(len)+' route';
       $('gtxt').textContent=watch!==null?'New route received.':'Route received. Tap Start tracking for guidance.';}
     else{$('grem').textContent='–';$('gtxt').textContent='Waiting for a route';$('arrow').style.visibility='hidden';}
-    if(last)guide(last);
+    if(cur)guide(cur,curAcc);
   }
-  function guide(pt){
+  function guide(pt,ac){
     if(route.length<2)return;
     let bi=0,bd=1e12;route.forEach((r,i)=>{const d=dist(pt,r);if(d<bd){bd=d;bi=i;}});
     let rem=0;for(let i=bi;i<route.length-1;i++)rem+=dist(route[i],route[i+1]);
@@ -890,6 +895,7 @@ function phone(auto){
       $('gtxt').textContent='Off route by '+Math.round(bd)+' m. Go '+compass(b)+' to rejoin.';}
     else{const b=bearing(pt,route[ti]);ar.style.transform='rotate('+b+'deg)';
       $('gtxt').textContent='On route. Head '+compass(b)+'.';}
+    if(ac>50)$('gtxt').textContent+=' (GPS ±'+Math.round(ac)+' m, approximate)';
   }
   $('bConn').onclick=()=>{
     const c=$('code').value.trim().toUpperCase();
@@ -901,22 +907,24 @@ function phone(auto){
     peer.on('error',e=>$('pst').textContent='Connection problem: '+e.type);
     peer.on('open',()=>{
       conn=peer.connect(PREFIX+c,{reliable:true});
-      conn.on('open',()=>{$('pst').textContent='Connected to laptop.';$('bConn').classList.add('hide');$('code').classList.add('hide');$('bGo').classList.remove('hide');initMap();});
-      conn.on('data',m=>{if(m&&m.type==='route'&&Array.isArray(m.pts)&&pm)setRoute(m.pts.filter(validPt).map(r=>[+r[0],+r[1]]));});
+      conn.on('open',()=>{conn.send({type:'hello',v:VER});setTimeout(()=>{if(!gotHello&&conn.open)$('gtxt').textContent='The laptop page is an OLD version. Re-download the new live-tracker.html on the laptop and open that.';},4000);$('pst').textContent='Connected to laptop.';$('bConn').classList.add('hide');$('code').classList.add('hide');$('bGo').classList.remove('hide');initMap();});
+      conn.on('data',m=>{if(m&&m.type==='hello'){gotHello=true;return;}if(m&&m.type==='route'&&Array.isArray(m.pts)&&pm)setRoute(m.pts.filter(validPt).map(r=>[+r[0],+r[1]]));});
       conn.on('close',()=>{$('pst').textContent='Disconnected. Reload and connect again.';stop();});
     });
   };
   function onPos(p){
     const c=p.coords;$('pa').textContent='±'+Math.round(c.accuracy)+' m';
-    if(c.accuracy>50){$('pst').textContent='Waiting for a better GPS signal…';return;}
-    const pt=[c.latitude,c.longitude];
+    const pt=[c.latitude,c.longitude];cur=pt;curAcc=c.accuracy;
+    if(pm){
+      if(!me)me=L.circleMarker(pt,{radius:9,color:'#fff',weight:3,fillColor:'#b3261e',fillOpacity:1}).addTo(pm);else me.setLatLng(pt);
+      if(firstFix&&c.accuracy<=300){pm.setView(pt,route.length>1?16:17);firstFix=false;}
+    }
+    guide(pt,c.accuracy);
+    if(c.accuracy>50){$('pst').textContent='Weak GPS signal (±'+Math.round(c.accuracy)+' m). Guidance is approximate. Go outdoors for a better fix.';return;}
     if(last){const d=dist(last,pt);if(d<Math.max(3,c.accuracy/3))return;total+=d;}
     last=pt;n++;$('pd').textContent=fmtD(total);$('pn').textContent=n;$('pst').textContent='Sending live. Keep this screen on.';
     if(conn&&conn.open)conn.send({type:'pt',lat:pt[0],lon:pt[1],acc:c.accuracy,t:p.timestamp});
-    if(pm){trail.addLatLng(pt);
-      if(!me)me=L.circleMarker(pt,{radius:9,color:'#fff',weight:3,fillColor:'#b3261e',fillOpacity:1}).addTo(pm);else me.setLatLng(pt);
-      if(firstFix){pm.setView(pt,17);firstFix=false;}else pm.panTo(pt);}
-    guide(pt);
+    if(pm){trail.addLatLng(pt);pm.panTo(pt);}
   }
   async function onErr(e){
     stop();
@@ -941,7 +949,7 @@ function phone(auto){
 $('bLap').addEventListener('click',laptop);
 $('bPhone').addEventListener('click',()=>phone());
 $('alive').style.color='#0a7d4f';
-$('alive').textContent='Ready'+(window.isSecureContext?'':' (not https: GPS will not work on this page)');
+$('alive').textContent='Ready, version '+VER+(window.isSecureContext?'':' (not https: GPS will not work on this page)');
 const h=location.hash.match(/phone=([A-Z0-9]{6})/i);if(h)phone(h[1].toUpperCase());
 </script>
 </body>
