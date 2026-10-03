@@ -736,7 +736,7 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
     <div><b id="la">–</b><span>Accuracy</span></div>
     <div><b id="lt">–</b><span>Last update</span></div>
   </div>
-  <div class="rbtns"><button id="rAdd">Add route points</button><button id="rUndo">Undo</button><button id="rClr">Clear route</button><label><input type="checkbox" id="rSnap" checked>Follow walking paths</label></div>
+  <div class="rbtns"><button id="rAdd">Add route points</button><button id="rFree">Draw freehand</button><button id="rUndo">Undo</button><button id="rClr">Clear route</button><label><input type="checkbox" id="rSnap" checked>Follow walking paths</label></div>
   <div id="st">Starting…</div>
 </div>
 
@@ -785,7 +785,7 @@ function laptop(){
   const line=L.polyline([],{color:'#0a7d4f',weight:5}).addTo(map);
   const rline=L.polyline([],{color:'#1565c0',weight:5,dashArray:'8 8'}).addTo(map);
   const wpLayer=L.layerGroup().addTo(map);
-  let marker=null,total=0,last=null,conns=[],routeMsg=null,wps=[],adding=false,rtk=0,gotPhone=false;
+  let marker=null,total=0,last=null,conns=[],routeMsg=null,wps=[],adding=false,freeMode=false,drawing=false,rtk=0;
   function add(p){
     if(last)total+=dist(last,p);last=p;line.addLatLng(p);
     if(!marker)marker=L.circleMarker(p,{radius:8,color:'#fff',weight:3,fillColor:'#b3261e',fillOpacity:1}).addTo(map);
@@ -799,10 +799,12 @@ function laptop(){
   async function rebuild(){
     const tk=++rtk;
     wpLayer.clearLayers();
-    wps.forEach((p,i)=>L.circleMarker(p,{radius:10,color:'#fff',weight:2,fillColor:'#1565c0',fillOpacity:1})
-      .bindTooltip(String(i+1),{permanent:true,direction:'center',className:'wpn'}).addTo(wpLayer));
-    let pts=wps.slice();
-    if($('rSnap').checked&&wps.length>1){
+    let num=0;
+    wps.forEach(p=>{if(p[2])return;L.circleMarker([p[0],p[1]],{radius:10,color:'#fff',weight:2,fillColor:'#1565c0',fillOpacity:1})
+      .bindTooltip(String(++num),{permanent:true,direction:'center',className:'wpn'}).addTo(wpLayer);});
+    const hasFree=wps.some(p=>p[2]);
+    let pts=wps.map(p=>[p[0],p[1]]);
+    if($('rSnap').checked&&wps.length>1&&!hasFree){
       try{
         const q=wps.map(p=>p[1]+','+p[0]).join(';');
         const r=await fetch('https://routing.openstreetmap.de/routed-foot/route/v1/foot/'+q+'?overview=full&geometries=geojson');
@@ -818,10 +820,22 @@ function laptop(){
     if(rp.length>1&&conns.some(c=>c.open))$('st').textContent='Route sent to phone ('+routeMsg.pts.length+' points).';
   }
   map.on('click',e=>{if(!adding)return;wps.push([e.latlng.lat,e.latlng.lng]);rebuild();});
-  $('rAdd').onclick=()=>{adding=!adding;$('rAdd').textContent=adding?'Done adding':'Add route points';
-    $('rAdd').className=adding?'main':'';map.getContainer().style.cursor=adding?'crosshair':'';
-    if(adding)$('st').textContent='Click the map to add route points in order.';};
-  $('rUndo').onclick=()=>{wps.pop();rebuild();};
+  function setMode(m){
+    adding=m==='points';freeMode=m==='draw';
+    $('rAdd').textContent=adding?'Done adding':'Add route points';$('rAdd').className=adding?'main':'';
+    $('rFree').textContent=freeMode?'Done drawing':'Draw freehand';$('rFree').className=freeMode?'main':'';
+    map.getContainer().style.cursor=m?'crosshair':'';
+    if(freeMode)map.dragging.disable();else map.dragging.enable();
+    if(adding)$('st').textContent='Click the map to add route points in order.';
+    if(freeMode)$('st').textContent='Hold the mouse button and drag on the map to draw the route.';
+  }
+  $('rAdd').onclick=()=>setMode(adding?null:'points');
+  $('rFree').onclick=()=>setMode(freeMode?null:'draw');
+  map.on('mousedown',e=>{if(!freeMode)return;drawing=true;wps.push([e.latlng.lat,e.latlng.lng,1]);});
+  map.on('mousemove',e=>{if(!drawing)return;const l=wps[wps.length-1],p=[e.latlng.lat,e.latlng.lng,1];
+    if(dist(l,p)<8)return;wps.push(p);rline.addLatLng([p[0],p[1]]);});
+  document.addEventListener('mouseup',()=>{if(!drawing)return;drawing=false;rebuild();});
+  $('rUndo').onclick=()=>{if(wps.length&&wps[wps.length-1][2]){while(wps.length&&wps[wps.length-1][2])wps.pop();}else wps.pop();rebuild();};
   $('rClr').onclick=()=>{wps=[];rebuild();};
   $('rSnap').onchange=()=>rebuild();
   const code=Array.from({length:6},()=>alpha[Math.floor(Math.random()*alpha.length)]).join('');
