@@ -701,7 +701,11 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 .lg{display:flex;align-items:center;gap:8px;font-size:14px;margin:2px 0}
 .dot2{width:16px;height:6px;border-radius:3px;flex:none}
 #legend{max-height:110px;overflow:auto;margin-bottom:6px}
-#pname{text-transform:none;letter-spacing:0}
+#pname,#q{text-transform:none;letter-spacing:0}
+#q{text-align:left;margin:0;flex:1}
+.srow{display:flex;gap:6px;margin-bottom:6px}.srow button{width:auto;margin:0;padding:8px 14px}
+#qres{max-height:130px;overflow:auto}
+#qres div{padding:7px 8px;border-bottom:1px solid #e3e9e4;cursor:pointer;font-size:14px}
 </style>
 </head>
 <body>
@@ -737,6 +741,8 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 <div id="map" class="hide"></div>
 <div class="bar hide" id="lapbar">
   <div style="margin-bottom:8px">Code: <code id="myCode">…</code></div>
+  <div class="srow"><input id="q" placeholder="Search UK street or postcode" autocomplete="off"><button class="main" id="qGo">Search</button></div>
+  <div id="qres"></div>
   <div id="legend">No phones yet.</div>
   <div class="rbtns"><button id="rAdd">Add route points</button><button id="rFree">Draw freehand</button><button id="rUndo">Undo</button><button id="rClr">Clear route</button><label><input type="checkbox" id="rSnap" checked>Follow walking paths</label><label><input type="checkbox" id="rFit" checked>Auto-zoom</label><button id="rAll">Fit all</button><button id="rNew">New session</button></div>
   <div id="st">Starting…</div>
@@ -894,6 +900,50 @@ function laptop(){
   $('rNew').onclick=()=>{if(!confirm('Start a new session? This deletes all recorded paths, the route and the current code.'))return;
     ['lt_lap_code','lt_phones','lt_wps'].forEach(LS.del);location.reload();};
   if(wps.length)rebuild();
+
+  /* ----- UK street / postcode search ----- */
+  let pin=null;
+  function goTo(lat,lon,label){
+    if(pin)map.removeLayer(pin);
+    pin=L.circleMarker([lat,lon],{radius:8,color:'#fff',weight:3,fillColor:'#f08c00',fillOpacity:1}).bindTooltip(label,{permanent:true,direction:'top'}).addTo(map);
+    lastFit=Date.now()+15000;map.flyTo([lat,lon],17);$('qres').textContent='';
+  }
+  async function getJSON(u){const r=await fetch(u);return r.json();}
+  async function doSearch(){
+    const q=$('q').value.trim(),res=$('qres');if(!q)return;
+    res.textContent='Searching…';
+    const pc=q.toUpperCase().replace(/\s+/g,'');let items=[];
+    try{
+      if(/^[A-Z]{1,2}\d[A-Z\d]?\d[A-Z]{2}$/.test(pc)){
+        const j=await getJSON('https://api.postcodes.io/postcodes/'+encodeURIComponent(pc));
+        if(j.result)items.push({label:j.result.postcode+(j.result.admin_district?', '+j.result.admin_district:''),lat:j.result.latitude,lon:j.result.longitude});
+      }else if(/^[A-Z]{1,2}\d[A-Z\d]?$/.test(pc)){
+        const j=await getJSON('https://api.postcodes.io/outcodes/'+encodeURIComponent(pc));
+        if(j.result)items.push({label:j.result.outcode+' area',lat:j.result.latitude,lon:j.result.longitude});
+      }
+    }catch(e){}
+    if(!items.length){
+      try{
+        const c=map.getCenter();
+        const j=await getJSON('https://photon.komoot.io/api/?limit=8&lang=en&bbox=-8.7,49.8,1.9,60.9&q='+encodeURIComponent(q)+(map.getZoom()>7?'&lat='+c.lat+'&lon='+c.lng:''));
+        (j.features||[]).forEach(f=>{const p=f.properties||{};if(p.countrycode&&p.countrycode!=='GB')return;
+          const l=[p.name||p.street,p.city||p.district,p.postcode].filter(Boolean).join(', ');
+          if(l&&f.geometry)items.push({label:l,lat:f.geometry.coordinates[1],lon:f.geometry.coordinates[0]});});
+      }catch(e){}
+    }
+    if(!items.length){
+      try{
+        const j=await getJSON('https://nominatim.openstreetmap.org/search?format=json&countrycodes=gb&limit=6&q='+encodeURIComponent(q));
+        j.forEach(x=>items.push({label:x.display_name,lat:+x.lat,lon:+x.lon}));
+      }catch(e){}
+    }
+    res.textContent='';
+    if(!items.length){res.textContent='No UK match. Try adding the town, for example "High Street, Leeds", or a full postcode.';return;}
+    if(items.length===1){goTo(items[0].lat,items[0].lon,items[0].label);return;}
+    items.forEach(it=>{const d=document.createElement('div');d.textContent=it.label;d.onclick=()=>goTo(it.lat,it.lon,it.label);res.append(d);});
+  }
+  $('qGo').onclick=doSearch;
+  $('q').addEventListener('keydown',e=>{if(e.key==='Enter')doSearch();});
 
   /* ----- connection (same code for 24 h) ----- */
   let ses=LS.get('lt_lap_code',null);
