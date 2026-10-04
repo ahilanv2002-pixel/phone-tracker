@@ -689,7 +689,7 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 .rbtns{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0}
 .rbtns button{width:auto;margin:0;padding:8px 12px}
 .rbtns label{font-size:14px}
-#rSnap{width:auto;margin:0 6px 0 0;padding:0;letter-spacing:0;text-transform:none}
+#rSnap,#rFit{width:auto;margin:0 6px 0 0;padding:0;letter-spacing:0;text-transform:none}
 .wpn{background:none;border:none;box-shadow:none;color:#fff;font-weight:700;padding:0}.wpn:before{display:none}
 #phone.live{margin:0;max-width:none;padding:0;display:flex;flex-direction:column;flex:1;min-height:0;text-align:left}
 #phone.live #pmap{flex:1;min-height:0}
@@ -698,6 +698,10 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 #guide{display:flex;gap:14px;align-items:center;margin-bottom:8px}
 #arrow{font-size:44px;line-height:1;display:inline-block;transition:transform .3s;color:#1565c0;visibility:hidden}
 #guide b{display:block;font-size:22px}#gtxt{color:#5d6b62;font-size:14px}
+.lg{display:flex;align-items:center;gap:8px;font-size:14px;margin:2px 0}
+.dot2{width:16px;height:6px;border-radius:3px;flex:none}
+#legend{max-height:110px;overflow:auto;margin-bottom:6px}
+#pname{text-transform:none;letter-spacing:0}
 </style>
 </head>
 <body>
@@ -716,14 +720,16 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
     <div id="guide" class="hide"><span id="arrow">&#8593;</span><div><b id="grem">–</b><span id="gtxt">Waiting for a route</span></div></div>
     <h1 id="ph1">Phone</h1>
     <p id="pp">Enter the code shown on the laptop.</p>
+    <input id="pname" maxlength="20" placeholder="Phone name (optional)" autocomplete="off">
     <input id="code" maxlength="6" placeholder="CODE" autocomplete="off">
     <button class="main" id="bConn">Connect</button>
-    <button id="bGo" class="hide main">Start tracking</button>
+    <button id="bGo" class="hide main">Start recording</button><button id="bReset" class="hide">End session and clear</button>
     <div class="stats" style="justify-content:center;margin-top:8px">
       <div><b id="pd">0 m</b><span>Distance</span></div>
       <div><b id="pa">–</b><span>Accuracy</span></div>
       <div><b id="pn">0</b><span>Points</span></div>
     </div>
+    <div id="plink" style="font-size:13px;color:#5d6b62;margin-top:10px"></div>
     <div id="pst" style="font-size:13px;color:#5d6b62;margin-top:12px"></div>
   </div>
 </div>
@@ -731,12 +737,8 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 <div id="map" class="hide"></div>
 <div class="bar hide" id="lapbar">
   <div style="margin-bottom:8px">Code: <code id="myCode">…</code></div>
-  <div class="stats">
-    <div><b id="ld">0 m</b><span>Distance</span></div>
-    <div><b id="la">–</b><span>Accuracy</span></div>
-    <div><b id="lt">–</b><span>Last update</span></div>
-  </div>
-  <div class="rbtns"><button id="rAdd">Add route points</button><button id="rFree">Draw freehand</button><button id="rUndo">Undo</button><button id="rClr">Clear route</button><label><input type="checkbox" id="rSnap" checked>Follow walking paths</label></div>
+  <div id="legend">No phones yet.</div>
+  <div class="rbtns"><button id="rAdd">Add route points</button><button id="rFree">Draw freehand</button><button id="rUndo">Undo</button><button id="rClr">Clear route</button><label><input type="checkbox" id="rSnap" checked>Follow walking paths</label><label><input type="checkbox" id="rFit" checked>Auto-zoom</label><button id="rAll">Fit all</button><button id="rNew">New session</button></div>
   <div id="st">Starting…</div>
 </div>
 
@@ -769,36 +771,85 @@ function dist(a,b){const R=6371000,r=Math.PI/180,dl=(b[0]-a[0])*r,dn=(b[1]-a[1])
   const h=Math.sin(dl/2)**2+Math.cos(a[0]*r)*Math.cos(b[0]*r)*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(h));}
 const fmtD=d=>d>=1000?(d/1000).toFixed(2)+' km':Math.round(d)+' m';
 
-const VER=3;
+const VER=4;
 const ESRI='https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}';
 function bearing(a,b){const r=Math.PI/180,dl=(b[1]-a[1])*r,y=Math.sin(dl)*Math.cos(b[0]*r),x=Math.cos(a[0]*r)*Math.sin(b[0]*r)-Math.sin(a[0]*r)*Math.cos(b[0]*r)*Math.cos(dl);return (Math.atan2(y,x)/r+360)%360;}
 const compass=b=>['north','north-east','east','south-east','south','south-west','west','north-west'][Math.round(b/45)%8];
 const validPt=r=>Array.isArray(r)&&isFinite(r[0])&&isFinite(r[1]);
 
+const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch(e){return d;}},
+  set(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}},del(k){try{localStorage.removeItem(k);}catch(e){}}};
+const COLORS=['#0a7d4f','#e8590c','#7048e8','#d6336c','#1098ad','#f08c00','#5c940d','#c92a2a'];
+const DAY=864e5;
+const newCode=()=>Array.from({length:6},()=>alpha[Math.floor(Math.random()*alpha.length)]).join('');
+
 /* ---------- Laptop ---------- */
 function laptop(){
+  LS.set('lt_role','laptop');
   $('start').classList.add('hide');$('map').classList.remove('hide');$('lapbar').classList.remove('hide');
   const map=L.map('map').setView([20,0],2);
   const esri=L.tileLayer(ESRI,{maxZoom:19,attribution:'Tiles © Esri'}).addTo(map);
   const sat=L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',{maxZoom:19,attribution:'Tiles © Esri'});
   const osm=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'});
   L.control.layers({'Street':esri,'Satellite':sat,'OpenStreetMap (hosted page only)':osm}).addTo(map);
-  const line=L.polyline([],{color:'#0a7d4f',weight:5}).addTo(map);
   const rline=L.polyline([],{color:'#1565c0',weight:5,dashArray:'8 8'}).addTo(map);
   const wpLayer=L.layerGroup().addTo(map);
-  let marker=null,total=0,last=null,conns=[],routeMsg=null,wps=[],adding=false,freeMode=false,drawing=false,rtk=0;
-  function add(p){
-    if(last)total+=dist(last,p);last=p;line.addLatLng(p);
-    if(!marker)marker=L.circleMarker(p,{radius:8,color:'#fff',weight:3,fillColor:'#b3261e',fillOpacity:1}).addTo(map);
-    else marker.setLatLng(p);
-    $('ld').textContent=fmtD(total);
+  let routeMsg=null,wps=LS.get('lt_wps',[]),adding=false,freeMode=false,drawing=false,rtk=0,lastFit=0,dirty=false;
+  const phones={};
+
+  /* ----- phones ----- */
+  function ensure(id,name,pts,ci){
+    if(phones[id])return phones[id];
+    const idx=ci!=null?ci:Object.keys(phones).length,color=COLORS[idx%COLORS.length];
+    const P={id,name:name||('Phone '+(idx+1)),ci:idx,color,pts:pts||[],total:0,conn:null,seen:0,mk:null};
+    P.line=L.polyline([],{color,weight:5}).addTo(map);
+    phones[id]=P;redraw(P);return P;
   }
-  function show(){if(adding||wps.length)return;const b=line.getBounds();if(b.isValid())map.fitBounds(b,{padding:[40,40],maxZoom:18});}
+  function redraw(P){
+    P.line.setLatLngs(P.pts.map(p=>[p[0],p[1]]));P.total=0;
+    for(let i=1;i<P.pts.length;i++)P.total+=dist(P.pts[i-1],P.pts[i]);
+    const l=P.pts[P.pts.length-1];
+    if(l){if(!P.mk)P.mk=L.circleMarker([l[0],l[1]],{radius:9,color:'#fff',weight:3,fillColor:P.color,fillOpacity:1}).bindTooltip(P.name,{direction:'top'}).addTo(map);
+      else P.mk.setLatLng([l[0],l[1]]);}
+    else if(P.mk){map.removeLayer(P.mk);P.mk=null;}
+  }
+  function addPts(P,arr){
+    arr.forEach(p=>{const q=[+p[0],+p[1],+p[2]||0];if(!validPt(q))return;
+      const l=P.pts[P.pts.length-1];if(l)P.total+=dist(l,q);P.pts.push(q);P.line.addLatLng([q[0],q[1]]);});
+    const l=P.pts[P.pts.length-1];
+    if(l){if(!P.mk)redraw(P);else P.mk.setLatLng([l[0],l[1]]);}
+    dirty=true;renderLegend();fitAll();
+  }
+  function fitAll(force){
+    if(!force&&(!$('rFit').checked||Date.now()-lastFit<3000||adding||freeMode))return;
+    let b=null;
+    const add=bb=>{if(!bb||!bb.isValid())return;const c=L.latLngBounds(bb.getSouthWest(),bb.getNorthEast());b=b?b.extend(c):c;};
+    Object.values(phones).forEach(P=>{if(P.pts.length)add(P.line.getBounds());});
+    if(wps.length)add(rline.getBounds());
+    if(b&&b.isValid()){lastFit=Date.now();map.fitBounds(b,{padding:[40,40],maxZoom:18});}
+  }
+  function renderLegend(){
+    const el=$('legend');el.textContent='';const ids=Object.keys(phones);
+    if(!ids.length){el.textContent='No phones yet.';return;}
+    ids.forEach(id=>{const P=phones[id],on=P.conn&&P.conn.open;
+      const row=document.createElement('div');row.className='lg';
+      const d=document.createElement('span');d.className='dot2';d.style.background=P.color;
+      const t=document.createElement('span');
+      t.textContent=P.name+' · '+fmtD(P.total)+' · '+(on?'online':'offline')+(P.seen?' · last '+new Date(P.seen).toLocaleTimeString():'');
+      row.append(d,t);el.append(row);});
+  }
+  function save(){if(!dirty)return;dirty=false;const o={};Object.values(phones).forEach(P=>{o[P.id]={name:P.name,ci:P.ci,pts:P.pts};});LS.set('lt_phones',o);}
+  setInterval(save,10000);setInterval(renderLegend,5000);addEventListener('pagehide',save);
+  const sv=LS.get('lt_phones',{});Object.keys(sv).forEach(id=>ensure(id,sv[id].name,sv[id].pts,sv[id].ci));
+  renderLegend();
+
+  /* ----- route drawing ----- */
   function densify(a){const o=[];for(let i=0;i<a.length-1;i++){const n=Math.max(1,Math.ceil(dist(a[i],a[i+1])/15));
     for(let k=0;k<n;k++)o.push([a[i][0]+(a[i+1][0]-a[i][0])*k/n,a[i][1]+(a[i+1][1]-a[i][1])*k/n]);}
     if(a.length)o.push(a[a.length-1]);return o;}
+  function sendRoute(c){if(routeMsg&&c&&c.open)c.send(routeMsg);}
   async function rebuild(){
-    const tk=++rtk;
+    const tk=++rtk;LS.set('lt_wps',wps);
     wpLayer.clearLayers();
     let num=0;
     wps.forEach(p=>{if(p[2])return;L.circleMarker([p[0],p[1]],{radius:10,color:'#fff',weight:2,fillColor:'#1565c0',fillOpacity:1})
@@ -817,8 +868,8 @@ function laptop(){
     }
     const rp=densify(pts);rline.setLatLngs(rp);
     routeMsg={type:'route',pts:rp.map(p=>[+p[0].toFixed(6),+p[1].toFixed(6)])};
-    conns.forEach(c=>c.open&&c.send(routeMsg));
-    if(rp.length>1&&conns.some(c=>c.open))$('st').textContent='Route sent to phone ('+routeMsg.pts.length+' points).';
+    Object.values(phones).forEach(P=>sendRoute(P.conn));
+    if(rp.length>1&&Object.values(phones).some(P=>P.conn&&P.conn.open))$('st').textContent='Route sent to phones ('+routeMsg.pts.length+' points).';
   }
   map.on('click',e=>{if(!adding)return;wps.push([e.latlng.lat,e.latlng.lng]);rebuild();});
   function setMode(m){
@@ -839,47 +890,84 @@ function laptop(){
   $('rUndo').onclick=()=>{if(wps.length&&wps[wps.length-1][2]){while(wps.length&&wps[wps.length-1][2])wps.pop();}else wps.pop();rebuild();};
   $('rClr').onclick=()=>{wps=[];rebuild();};
   $('rSnap').onchange=()=>rebuild();
-  const code=Array.from({length:6},()=>alpha[Math.floor(Math.random()*alpha.length)]).join('');
-  const peer=new Peer(PREFIX+code);
-  peer.on('open',()=>{$('myCode').textContent=code;$('st').textContent='Waiting for the phone. Enter this code there.';});
-  peer.on('error',e=>{$('st').textContent='Connection problem: '+e.type+'. Reload to get a new code.';});
-  peer.on('connection',c=>{
-    conns.push(c);
-    c.on('open',()=>{$('st').textContent='Phone connected.';c.send({type:'hello',v:VER});if(routeMsg)c.send(routeMsg);
-      setTimeout(()=>{if(!c.ver&&c.open)$('st').textContent='The phone is running an OLD version of this page. Upload the new file to GitHub, then reload the phone.';},4000);});
+  $('rAll').onclick=()=>fitAll(true);
+  $('rNew').onclick=()=>{if(!confirm('Start a new session? This deletes all recorded paths, the route and the current code.'))return;
+    ['lt_lap_code','lt_phones','lt_wps'].forEach(LS.del);location.reload();};
+  if(wps.length)rebuild();
+
+  /* ----- connection (same code for 24 h) ----- */
+  let ses=LS.get('lt_lap_code',null);
+  if(!ses||Date.now()-ses.t>DAY){ses={code:newCode(),t:Date.now()};LS.set('lt_lap_code',ses);}
+  const code=ses.code;let peer=null,tries=0;
+  function onConn(c){
     c.on('data',m=>{
       if(!m)return;
-      if(m.type==='hello'){c.ver=m.v;return;}
-      if(m.type==='pt'&&isFinite(m.lat)&&isFinite(m.lon)){
-        add([m.lat,m.lon]);show();
-        $('la').textContent='±'+Math.round(m.acc||0)+' m';
-        $('lt').textContent=new Date().toLocaleTimeString();
-      }
+      if(m.type==='hello'){
+        if(!m.id){$('st').textContent='A phone with an OLD version of the page tried to connect. Upload the new file and reload the phone.';return;}
+        c.ver=m.v;const P=ensure(String(m.id),String(m.name||'').slice(0,20));
+        if(m.name)P.name=String(m.name).slice(0,20);
+        if(P.conn&&P.conn!==c){try{P.conn.close();}catch(e){}}
+        P.conn=c;c.pid=P.id;P.seen=Date.now();
+        if((m.n|0)<P.pts.length){P.pts=[];redraw(P);}
+        c.send({type:'hello',v:VER});c.send({type:'ack',have:P.pts.length,color:P.color});sendRoute(c);
+        $('st').textContent=P.name+' connected.';renderLegend();return;}
+      const P=phones[c.pid];if(!P)return;P.seen=Date.now();
+      if(m.type==='batch'&&Array.isArray(m.pts)&&(m.from|0)<=P.pts.length){addPts(P,m.pts.slice(P.pts.length-(m.from|0)));}
+      else if(m.type==='pt'&&isFinite(m.lat)&&isFinite(m.lon)){
+        if(m.i===P.pts.length)addPts(P,[[m.lat,m.lon,m.t]]);
+        else if(m.i>P.pts.length)c.send({type:'ack',have:P.pts.length,color:P.color});}
+      else if(m.type==='reset'){P.pts=[];redraw(P);dirty=true;renderLegend();}
     });
-    c.on('close',()=>{conns=conns.filter(x=>x!==c);$('st').textContent='Phone disconnected. Reopen the phone page and connect again.';});
-  });
+    c.on('close',()=>{const P=phones[c.pid];if(P&&P.conn===c)P.conn=null;renderLegend();});
+    setTimeout(()=>{if(!c.ver&&c.open)$('st').textContent='A phone is running an OLD version of this page. Upload the new file to GitHub, then reload the phone.';},4000);
+  }
+  function startPeer(){
+    peer=new Peer(PREFIX+code);
+    peer.on('open',()=>{tries=0;$('myCode').textContent=code;$('st').textContent=Object.keys(phones).length?'Ready. Phones reconnect automatically.':'Waiting for phones. Enter this code there.';});
+    peer.on('connection',onConn);
+    peer.on('disconnected',()=>{setTimeout(()=>{try{peer.reconnect();}catch(e){}},3000);});
+    peer.on('close',()=>setTimeout(startPeer,5000));
+    peer.on('error',e=>{
+      if(e.type==='unavailable-id'&&tries++<20){$('st').textContent='Reclaiming your code…';try{peer.destroy();}catch(_){}return;}
+      $('st').textContent='Connection problem: '+e.type+'.';});
+  }
+  startPeer();
 }
 
 /* ---------- Phone ---------- */
 function phone(auto){
+  LS.set('lt_role','phone');
   $('start').classList.add('hide');$('phone').classList.remove('hide');
-  if(auto)$('code').value=auto;
-  let conn=null,watch=null,last=null,total=0,n=0,peer=null,pm=null,rl=null,trail=null,me=null,route=[],firstFix=true,cur=null,curAcc=0,gotHello=false;
+  let pid=LS.get('lt_pid',null);if(!pid){pid=Math.random().toString(36).slice(2,10);LS.set('lt_pid',pid);}
+  let name=LS.get('lt_name','');$('pname').value=name;
+  let pts=LS.get('lt_pts',[]).filter(validPt),route=LS.get('lt_route',[]).filter(validPt);
+  let code=null,conn=null,peer=null,linked=false,watch=null,tracking=!!LS.get('lt_track',0),live=false,dirty=false,rt=null,wl=null;
+  let pm=null,rl=null,trail=null,me=null,firstFix=true,cur=null,curAcc=0,gotHello=false,col='#0a7d4f',total=0;
+  for(let i=1;i<pts.length;i++)total+=dist(pts[i-1],pts[i]);
   if(!window.isSecureContext)$('pst').textContent='This page is not https, so GPS will be blocked. Open the hosted https link on the phone, not a local file.';
-  function initMap(){
+  const setSt=t=>{$('pst').textContent=t;};
+  const setLink=()=>{$('plink').textContent=linked?'● Linked to laptop':(live?'○ Not linked, retrying. Check the laptop is open and the code is right.':'');};
+  function save(){if(!dirty)return;dirty=false;LS.set('lt_pts',pts);}
+  setInterval(save,8000);addEventListener('pagehide',save);
+
+  function goLive(){
+    if(live)return;live=true;
     $('phone').classList.add('live');$('pmap').classList.remove('hide');$('guide').classList.remove('hide');
+    ['pname','code','bConn'].forEach(i=>$(i).classList.add('hide'));$('bGo').classList.remove('hide');$('bReset').classList.remove('hide');
     pm=L.map('pmap',{zoomControl:false}).setView([20,0],2);
     L.tileLayer(ESRI,{maxZoom:19,attribution:'Tiles © Esri'}).addTo(pm);
-    rl=L.polyline([],{color:'#1565c0',weight:6,dashArray:'8 8'}).addTo(pm);
-    trail=L.polyline([],{color:'#0a7d4f',weight:5}).addTo(pm);
-    setTimeout(()=>{pm.invalidateSize();if(route.length)pm.fitBounds(rl.getBounds(),{padding:[30,30]});},150);
+    rl=L.polyline(route,{color:'#1565c0',weight:6,dashArray:'8 8'}).addTo(pm);
+    trail=L.polyline(pts.map(p=>[p[0],p[1]]),{color:col,weight:5}).addTo(pm);
+    $('pd').textContent=fmtD(total);$('pn').textContent=pts.length;setBtn();setLink();
+    setTimeout(()=>{pm.invalidateSize();const b=pts.length?trail.getBounds():(route.length>1?rl.getBounds():null);if(b&&b.isValid())pm.fitBounds(b,{padding:[30,30],maxZoom:17});},150);
+    if(route.length>1)$('gtxt').textContent='Saved route loaded.';
   }
   function setRoute(a){
-    route=a;rl.setLatLngs(a);
+    route=a;LS.set('lt_route',a);rl.setLatLngs(a);
     if(a.length>1){pm.fitBounds(rl.getBounds(),{padding:[30,30]});firstFix=true;
       let len=0;for(let i=0;i<a.length-1;i++)len+=dist(a[i],a[i+1]);
       $('grem').textContent=fmtD(len)+' route';
-      $('gtxt').textContent=watch!==null?'New route received.':'Route received. Tap Start tracking for guidance.';}
+      $('gtxt').textContent=watch!==null?'New route received.':'Route received. Tap Start recording for guidance.';}
     else{$('grem').textContent='–';$('gtxt').textContent='Waiting for a route';$('arrow').style.visibility='hidden';}
     if(cur)guide(cur,curAcc);
   }
@@ -889,7 +977,7 @@ function phone(auto){
     let rem=0;for(let i=bi;i<route.length-1;i++)rem+=dist(route[i],route[i+1]);
     const ar=$('arrow');ar.style.visibility='visible';
     if(rem<20){$('grem').textContent='Arrived';$('gtxt').textContent='You are at the end of the route.';ar.style.visibility='hidden';return;}
-    let ti=bi,acc=0;while(ti<route.length-1&&acc<30){acc+=dist(route[ti],route[ti+1]);ti++;}
+    let ti=bi,sum=0;while(ti<route.length-1&&sum<30){sum+=dist(route[ti],route[ti+1]);ti++;}
     $('grem').textContent=fmtD(rem)+' left';
     if(bd>40){const b=bearing(pt,route[bi]);ar.style.transform='rotate('+b+'deg)';
       $('gtxt').textContent='Off route by '+Math.round(bd)+' m. Go '+compass(b)+' to rejoin.';}
@@ -897,60 +985,101 @@ function phone(auto){
       $('gtxt').textContent='On route. Head '+compass(b)+'.';}
     if(ac>50)$('gtxt').textContent+=' (GPS ±'+Math.round(ac)+' m, approximate)';
   }
-  $('bConn').onclick=()=>{
-    const c=$('code').value.trim().toUpperCase();
-    if(c.length<6){$('pst').textContent='Enter the 6-character code.';return;}
-    if(typeof Peer==='undefined'){$('pst').textContent='PeerJS did not load. Check the internet and reload.';return;}
-    $('pst').textContent='Connecting…';
-    setTimeout(()=>{if(!(conn&&conn.open)&&$('pst').textContent==='Connecting…')$('pst').textContent='Still connecting. Check the code, and try mobile data if on strict Wi-Fi.';},12000);
+
+  /* ----- link to laptop, with automatic retry ----- */
+  function retry(){if(rt)return;rt=setTimeout(()=>{rt=null;connect();},5000);}
+  function connect(){
+    if(!code)return;
+    if(typeof Peer==='undefined'){setSt('PeerJS did not load. Check the internet and reload.');return;}
+    try{if(peer)peer.destroy();}catch(e){}
+    linked=false;setLink();
     peer=new Peer();
-    peer.on('error',e=>$('pst').textContent='Connection problem: '+e.type);
+    peer.on('error',()=>{linked=false;setLink();retry();});
+    peer.on('disconnected',()=>{try{peer.reconnect();}catch(e){}});
     peer.on('open',()=>{
-      conn=peer.connect(PREFIX+c,{reliable:true});
-      conn.on('open',()=>{conn.send({type:'hello',v:VER});setTimeout(()=>{if(!gotHello&&conn.open)$('gtxt').textContent='The laptop page is an OLD version. Re-download the new live-tracker.html on the laptop and open that.';},4000);$('pst').textContent='Connected to laptop.';$('bConn').classList.add('hide');$('code').classList.add('hide');$('bGo').classList.remove('hide');initMap();});
-      conn.on('data',m=>{if(m&&m.type==='hello'){gotHello=true;return;}if(m&&m.type==='route'&&Array.isArray(m.pts)&&pm)setRoute(m.pts.filter(validPt).map(r=>[+r[0],+r[1]]));});
-      conn.on('close',()=>{$('pst').textContent='Disconnected. Reload and connect again.';stop();});
+      const c=peer.connect(PREFIX+code,{reliable:true});conn=c;
+      c.on('open',()=>{linked=true;setLink();
+        c.send({type:'hello',v:VER,id:pid,name,n:pts.length});
+        setTimeout(()=>{if(!gotHello&&c.open)$('gtxt').textContent='The laptop page is an OLD version. Re-download the new live-tracker.html on the laptop and open that.';},4000);});
+      c.on('data',onData);
+      c.on('close',()=>{linked=false;setLink();retry();});
+      c.on('error',()=>{linked=false;setLink();retry();});
     });
-  };
+  }
+  function sendBatch(from){
+    if(!conn||!conn.open)return;
+    for(let i=from;i<pts.length;i+=1000)conn.send({type:'batch',from:i,pts:pts.slice(i,i+1000)});
+  }
+  function onData(m){
+    if(!m)return;
+    if(m.type==='hello'){gotHello=true;return;}
+    if(m.type==='route'&&Array.isArray(m.pts)){setRoute(m.pts.filter(validPt).map(r=>[+r[0],+r[1]]));return;}
+    if(m.type==='ack'){if(m.color){col=m.color;trail.setStyle({color:col});if(me)me.setStyle({fillColor:col});}sendBatch(m.have|0);}
+  }
+
+  /* ----- recording ----- */
+  function setBtn(){const on=watch!==null;$('bGo').textContent=on?'Stop recording':(pts.length?'Resume recording':'Start recording');$('bGo').className=on?'stop':'main';}
+  async function lock(){try{if('wakeLock' in navigator&&watch!==null&&!document.hidden&&!wl){wl=await navigator.wakeLock.request('screen');wl.addEventListener('release',()=>{wl=null;});}}catch(e){}}
   function onPos(p){
     const c=p.coords;$('pa').textContent='±'+Math.round(c.accuracy)+' m';
     const pt=[c.latitude,c.longitude];cur=pt;curAcc=c.accuracy;
     if(pm){
-      if(!me)me=L.circleMarker(pt,{radius:9,color:'#fff',weight:3,fillColor:'#b3261e',fillOpacity:1}).addTo(pm);else me.setLatLng(pt);
+      if(!me)me=L.circleMarker(pt,{radius:9,color:'#fff',weight:3,fillColor:col,fillOpacity:1}).addTo(pm);else me.setLatLng(pt);
       if(firstFix&&c.accuracy<=300){pm.setView(pt,route.length>1?16:17);firstFix=false;}
     }
     guide(pt,c.accuracy);
-    if(c.accuracy>50){$('pst').textContent='Weak GPS signal (±'+Math.round(c.accuracy)+' m). Guidance is approximate. Go outdoors for a better fix.';return;}
-    if(last){const d=dist(last,pt);if(d<Math.max(3,c.accuracy/3))return;total+=d;}
-    last=pt;n++;$('pd').textContent=fmtD(total);$('pn').textContent=n;$('pst').textContent='Sending live. Keep this screen on.';
-    if(conn&&conn.open)conn.send({type:'pt',lat:pt[0],lon:pt[1],acc:c.accuracy,t:p.timestamp});
+    if(c.accuracy>50){setSt('Weak GPS signal (±'+Math.round(c.accuracy)+' m). Not recorded. Go outdoors for a better fix.');return;}
+    const l=pts[pts.length-1];
+    if(l){const d=dist(l,pt);if(d<Math.max(3,c.accuracy/3))return;total+=d;}
+    pts.push([+pt[0].toFixed(6),+pt[1].toFixed(6),p.timestamp]);dirty=true;
+    $('pd').textContent=fmtD(total);$('pn').textContent=pts.length;setSt('Recording. Keep this screen on.');
+    if(conn&&conn.open&&linked)conn.send({type:'pt',i:pts.length-1,lat:pt[0],lon:pt[1],acc:c.accuracy,t:p.timestamp});
     if(pm){trail.addLatLng(pt);pm.panTo(pt);}
   }
   async function onErr(e){
-    stop();
-    let st='unknown';
-    try{st=(await navigator.permissions.query({name:'geolocation'})).state;}catch(_){}
-    const why=!window.isSecureContext?'This page is not https. Open the https link, not a file.':
-      e.code===1?(st==='denied'?'The browser has this site set to Blocked. Tap the lock icon in the address bar, then Permissions, Location, Allow. Then reload.':
-        'Android is blocking the browser. Settings > Apps > your browser > Permissions > Location > Allow while using, and turn on Precise location.'):
-      e.code===2?'No position available. Go outdoors and check Location is on.':'Timed out. Try again.';
-    $('pst').textContent=why+' (code '+e.code+', permission: '+st+')';
+    if(e.code===1){
+      if(watch!==null){navigator.geolocation.clearWatch(watch);watch=null;}setBtn();
+      let st='unknown';try{st=(await navigator.permissions.query({name:'geolocation'})).state;}catch(_){}
+      setSt((!window.isSecureContext?'This page is not https. Open the https link, not a file.':
+        st==='denied'?'The browser has this site set to Blocked. Tap the lock icon in the address bar, then Permissions, Location, Allow. Then reload.':
+        'Android is blocking the browser. Settings > Apps > your browser > Permissions > Location > Allow while using, and turn on Precise location.')+' (code 1, permission: '+st+')');
+    }else setSt(e.code===2?'No position available right now. Still trying.':'GPS is slow. Still trying.');
   }
-  function stop(){if(watch!==null){navigator.geolocation.clearWatch(watch);watch=null;}$('bGo').textContent='Start tracking';$('bGo').className='main';}
-  $('bGo').onclick=()=>{
-    if(watch!==null){stop();return;}
-    if(!navigator.geolocation){$('pst').textContent='No location support in this browser.';return;}
-    watch=navigator.geolocation.watchPosition(onPos,onErr,{enableHighAccuracy:true,maximumAge:0,timeout:20000});
-    $('bGo').textContent='Stop';$('bGo').className='stop';$('pst').textContent='Locating…';
+  function start(){
+    if(!navigator.geolocation){setSt('No location support in this browser.');return;}
+    if(watch!==null)navigator.geolocation.clearWatch(watch);
+    watch=navigator.geolocation.watchPosition(onPos,onErr,{enableHighAccuracy:true,maximumAge:0,timeout:30000});
+    tracking=true;LS.set('lt_track',1);setBtn();setSt('Locating…');lock();
+  }
+  function stop(user){
+    if(watch!==null){navigator.geolocation.clearWatch(watch);watch=null;}
+    if(user){tracking=false;LS.set('lt_track',0);if(wl){try{wl.release();}catch(e){}wl=null;}}
+    save();setBtn();if(user)setSt('Recording stopped. '+pts.length+' points saved on this phone.');
+  }
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)save();else if(tracking&&live)start();});
+  $('bGo').onclick=()=>{if(watch!==null)stop(true);else start();};
+  $('bReset').onclick=()=>{
+    if(!confirm('End this session and delete the recorded path on this phone?'))return;
+    try{if(conn&&conn.open)conn.send({type:'reset'});}catch(e){}
+    stop(true);['lt_pts','lt_pcode','lt_route','lt_track'].forEach(LS.del);setTimeout(()=>location.reload(),300);
   };
-  if(auto)$('bConn').click();
+  $('bConn').onclick=()=>{
+    const c=$('code').value.trim().toUpperCase();
+    if(c.length<6){setSt('Enter the 6-character code.');return;}
+    name=$('pname').value.trim().slice(0,20);LS.set('lt_name',name);
+    code=c;LS.set('lt_pcode',{code:c,t:Date.now()});
+    goLive();connect();setSt('Connecting… tap Start recording any time.');
+  };
+  const sv=LS.get('lt_pcode',null);
+  if(auto){$('code').value=auto;$('bConn').click();}
+  else if(sv&&Date.now()-sv.t<DAY){code=sv.code;goLive();connect();if(tracking)start();else setSt('Session restored. '+pts.length+' points saved.');}
 }
 
 $('bLap').addEventListener('click',laptop);
 $('bPhone').addEventListener('click',()=>phone());
 $('alive').style.color='#0a7d4f';
 $('alive').textContent='Ready, version '+VER+(window.isSecureContext?'':' (not https: GPS will not work on this page)');
-const h=location.hash.match(/phone=([A-Z0-9]{6})/i);if(h)phone(h[1].toUpperCase());
+const h=location.hash.match(/phone=([A-Z0-9]{6})/i);if(h)phone(h[1].toUpperCase());else{const role=LS.get('lt_role',null);if(role==='laptop')laptop();else if(role==='phone')phone();}
 </script>
 </body>
 </html>
