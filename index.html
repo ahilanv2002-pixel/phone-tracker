@@ -701,6 +701,9 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 .lg{display:flex;align-items:center;gap:8px;font-size:14px;margin:2px 0}
 .dot2{width:16px;height:6px;border-radius:3px;flex:none}
 #legend{max-height:110px;overflow:auto;margin-bottom:6px}
+.wpd{background:#1565c0;border:3px solid #fff;border-radius:50%;box-shadow:0 0 4px rgba(0,0,0,.5);color:#fff;font:700 14px/22px system-ui,sans-serif;text-align:center;cursor:move}
+.wpA{background:#2b8a3e}.wpB{background:#c92a2a}
+.hitline{cursor:grab}
 #pname,#q{text-transform:none;letter-spacing:0}
 #q{text-align:left;margin:0;flex:1}
 .srow{display:flex;gap:6px;margin-bottom:6px}.srow button{width:auto;margin:0;padding:8px 14px}
@@ -721,7 +724,7 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 <div id="phone" class="hide">
   <div id="pmap" class="hide"></div>
   <div class="pbody">
-    <div id="guide" class="hide"><span id="arrow">&#8593;</span><div><b id="grem">–</b><span id="gtxt">Waiting for a route</span></div></div>
+    <div id="guide" class="hide"><span id="arrow">&#8593;</span><div><b id="grem">–</b><span id="gtxt">Waiting for a route</span><span id="geta" style="display:block;font-size:13px;color:#5d6b62"></span></div></div>
     <h1 id="ph1">Phone</h1>
     <p id="pp">Enter the code shown on the laptop.</p>
     <input id="pname" maxlength="20" placeholder="Phone name (optional)" autocomplete="off">
@@ -741,10 +744,11 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 <div id="map" class="hide"></div>
 <div class="bar hide" id="lapbar">
   <div style="margin-bottom:8px">Code: <code id="myCode">…</code></div>
+  <div id="eta" style="font-weight:600;margin:4px 0"></div>
   <div class="srow"><input id="q" placeholder="Search UK street or postcode" autocomplete="off"><button class="main" id="qGo">Search</button></div>
   <div id="qres"></div>
   <div id="legend">No phones yet.</div>
-  <div class="rbtns"><button id="rAdd">Add route points</button><button id="rFree">Draw freehand</button><button id="rUndo">Undo</button><button id="rClr">Clear route</button><label><input type="checkbox" id="rSnap" checked>Follow walking paths</label><label><input type="checkbox" id="rFit" checked>Auto-zoom</label><button id="rAll">Fit all</button><button id="rNew">New session</button></div>
+  <div class="rbtns"><button id="rAB">Set departure &amp; arrival</button><button id="rAdd">Extend route</button><button id="rFree">Draw freehand</button><button id="rUndo">Undo</button><button id="rClr">Clear route</button><label><input type="checkbox" id="rSnap" checked>Follow walking paths</label><label><input type="checkbox" id="rFit" checked>Auto-zoom</label><button id="rAll">Fit all</button><button id="rNew">New session</button></div>
   <div id="st">Starting…</div>
 </div>
 
@@ -785,9 +789,17 @@ const validPt=r=>Array.isArray(r)&&isFinite(r[0])&&isFinite(r[1]);
 
 const LS={get(k,d){try{const v=localStorage.getItem(k);return v==null?d:JSON.parse(v);}catch(e){return d;}},
   set(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}},del(k){try{localStorage.removeItem(k);}catch(e){}}};
+const fmtT=t=>{t=Math.round(t/60);if(t<1)return'<1 min';if(t<60)return t+' min';return Math.floor(t/60)+' h '+(t%60)+' min';};
 const COLORS=['#0a7d4f','#e8590c','#7048e8','#d6336c','#1098ad','#f08c00','#5c940d','#c92a2a'];
 const DAY=864e5;
 const newCode=()=>Array.from({length:6},()=>alpha[Math.floor(Math.random()*alpha.length)]).join('');
+
+function viaInsertIndex(wps,rpts,k){
+  let from=0,j=1;const idx=[];
+  wps.forEach(p=>{let bi=from,bd=1e12;for(let i=from;i<rpts.length;i++){const d=dist(p,rpts[i]);if(d<bd){bd=d;bi=i;}}idx.push(bi);from=bi;});
+  while(j<wps.length-1&&idx[j]<=k)j++;
+  return j;
+}
 
 /* ---------- Laptop ---------- */
 function laptop(){
@@ -799,8 +811,9 @@ function laptop(){
   const osm=L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap contributors'});
   L.control.layers({'Street':esri,'Satellite':sat,'OpenStreetMap (hosted page only)':osm}).addTo(map);
   const rline=L.polyline([],{color:'#1565c0',weight:5,dashArray:'8 8'}).addTo(map);
+  const hit=L.polyline([],{color:'#000',weight:22,opacity:0,className:'hitline'}).addTo(map);
   const wpLayer=L.layerGroup().addTo(map);
-  let routeMsg=null,wps=LS.get('lt_wps',[]),adding=false,freeMode=false,drawing=false,rtk=0,lastFit=0,dirty=false;
+  let routeMsg=null,etaMsg=null,wps=LS.get('lt_wps',[]),adding=false,abMode=false,freeMode=false,drawing=false,dragVia=null,rpts=[],rtk=0,lastFit=0,dirty=false;
   const phones={};
 
   /* ----- phones ----- */
@@ -827,7 +840,7 @@ function laptop(){
     dirty=true;renderLegend();fitAll();
   }
   function fitAll(force){
-    if(!force&&(!$('rFit').checked||Date.now()-lastFit<3000||adding||freeMode))return;
+    if(!force&&(!$('rFit').checked||Date.now()-lastFit<3000||adding||abMode||freeMode))return;
     let b=null;
     const add=bb=>{if(!bb||!bb.isValid())return;const c=L.latLngBounds(bb.getSouthWest(),bb.getNorthEast());b=b?b.extend(c):c;};
     Object.values(phones).forEach(P=>{if(P.pts.length)add(P.line.getBounds());});
@@ -850,44 +863,107 @@ function laptop(){
   renderLegend();
 
   /* ----- route drawing ----- */
-  function densify(a){const o=[];for(let i=0;i<a.length-1;i++){const n=Math.max(1,Math.ceil(dist(a[i],a[i+1])/15));
+  function densify(a){const o=[];let tot=0;for(let i=0;i<a.length-1;i++)tot+=dist(a[i],a[i+1]);const step=Math.max(15,tot/4000);
+    for(let i=0;i<a.length-1;i++){const n=Math.max(1,Math.ceil(dist(a[i],a[i+1])/step));
     for(let k=0;k<n;k++)o.push([a[i][0]+(a[i+1][0]-a[i][0])*k/n,a[i][1]+(a[i+1][1]-a[i][1])*k/n]);}
     if(a.length)o.push(a[a.length-1]);return o;}
-  function sendRoute(c){if(routeMsg&&c&&c.open)c.send(routeMsg);}
+  function sendRoute(c){if(c&&c.open){if(routeMsg)c.send(routeMsg);if(etaMsg)c.send(etaMsg);}}
   async function rebuild(){
     const tk=++rtk;LS.set('lt_wps',wps);
     wpLayer.clearLayers();
-    let num=0;
-    wps.forEach(p=>{if(p[2])return;L.circleMarker([p[0],p[1]],{radius:10,color:'#fff',weight:2,fillColor:'#1565c0',fillOpacity:1})
-      .bindTooltip(String(++num),{permanent:true,direction:'center',className:'wpn'}).addTo(wpLayer);});
+    const last=wps.length-1;
+    wps.forEach((p,i)=>{
+      const isA=i===0,isB=i===last&&last>0;
+      if(p[2]&&!isA&&!isB)return;
+      const ic=L.divIcon({className:'wpd'+(isA?' wpA':isB?' wpB':''),html:isA?'A':isB?'B':'',iconSize:isA||isB?[28,28]:[18,18]});
+      const mk=L.marker([p[0],p[1]],{icon:ic,draggable:true,zIndexOffset:isA||isB?1000:500}).addTo(wpLayer);
+      mk.bindTooltip(isA?'Departure':isB?'Arrival':'Via point. Drag to move, right-click to remove.',{direction:'top',offset:[0,-10]});
+      mk.on('dragend',()=>{const ll=mk.getLatLng();wps[i]=[ll.lat,ll.lng];rebuild();});
+      if(!isA&&!isB){mk.on('contextmenu',()=>{wps.splice(i,1);rebuild();});mk.on('dblclick',ev=>{L.DomEvent.stop(ev);wps.splice(i,1);rebuild();});}
+    });
     const hasFree=wps.some(p=>p[2]);
     let pts=wps.map(p=>[p[0],p[1]]);
+    const key=wps.filter((p,i)=>!p[2]||i===0||i===wps.length-1).map(p=>[p[0],p[1]]);
+    const carP=key.length>1?routeInfo('car',key).catch(()=>null):Promise.resolve(null);
+    let walk=null;
     if($('rSnap').checked&&wps.length>1&&!hasFree){
       try{
-        const q=wps.map(p=>p[1]+','+p[0]).join(';');
-        const r=await fetch('https://routing.openstreetmap.de/routed-foot/route/v1/foot/'+q+'?overview=full&geometries=geojson');
-        const j=await r.json();
+        const rt=await routeInfo('foot',wps.map(p=>[p[0],p[1]]));
         if(tk!==rtk)return;
-        if(j.routes&&j.routes[0])pts=j.routes[0].geometry.coordinates.map(c=>[c[1],c[0]]);
+        if(rt){pts=rt.geometry.coordinates.map(c=>[c[1],c[0]]);walk=rt.duration;}
         else $('st').textContent='No walking path found. Using straight lines.';
       }catch(e){if(tk!==rtk)return;$('st').textContent='Path service unavailable. Using straight lines.';}
     }
-    const rp=densify(pts);rline.setLatLngs(rp);
-    routeMsg={type:'route',pts:rp.map(p=>[+p[0].toFixed(6),+p[1].toFixed(6)])};
+    const rp=densify(pts);rpts=rp;rline.setLatLngs(rp);hit.setLatLngs(rp);
+    etaMsg=null;routeMsg={type:'route',pts:rp.map(p=>[+p[0].toFixed(6),+p[1].toFixed(6)])};
     Object.values(phones).forEach(P=>sendRoute(P.conn));
     if(rp.length>1&&Object.values(phones).some(P=>P.conn&&P.conn.open))$('st').textContent='Route sent to phones ('+routeMsg.pts.length+' points).';
+    if(rp.length<2){showEta(null);return;}
+    $('eta').textContent='Calculating times…';
+    let len=0;for(let i=1;i<rp.length;i++)len+=dist(rp[i-1],rp[i]);
+    const car=await carP;if(tk!==rtk)return;
+    const info={d:Math.round(len),w:Math.round(walk!=null?walk:len/1.39),we:walk==null,c:car?Math.round(car.duration):null,cd:car?Math.round(car.distance):null};
+    showEta(info);etaMsg={type:'eta',info};
+    Object.values(phones).forEach(P=>{if(P.conn&&P.conn.open)P.conn.send(etaMsg);});
   }
-  map.on('click',e=>{if(!adding)return;wps.push([e.latlng.lat,e.latlng.lng]);rebuild();});
+  async function routeInfo(profile,pts){
+    const car=profile==='car',q=pts.map(p=>p[1]+','+p[0]).join(';');
+    const r=await fetch('https://routing.openstreetmap.de/routed-'+(car?'car':'foot')+'/route/v1/'+(car?'driving':'foot')+'/'+q+'?overview='+(car?'false':'full')+'&geometries=geojson');
+    const j=await r.json();return j.routes&&j.routes[0]?j.routes[0]:null;
+  }
+  function showEta(info){
+    if(!info){$('eta').textContent='';etaMsg=null;Object.values(phones).forEach(P=>{if(P.conn&&P.conn.open)P.conn.send({type:'eta',info:null});});return;}
+    $('eta').textContent='Route '+fmtD(info.d)+'  ·  Walk '+fmtT(info.w)+(info.we?' (estimate)':'')+'  ·  Car '+(info.c!=null?fmtT(info.c)+' ('+fmtD(info.cd)+' by road)':'not available');
+  }
+  function addAB(lat,lng){
+    if(wps.length>=2)return;
+    wps.push([lat,lng]);
+    $('st').textContent=wps.length===2?'Route created. Drag the line to reshape it. A and B stay in place.':'Now pick the arrival point (click the map or search and pick a place).';
+    if(wps.length===2)setMode(null);
+    rebuild();
+  }
+  map.on('click',e=>{
+    if(abMode){addAB(e.latlng.lat,e.latlng.lng);return;}
+    if(!adding)return;wps.push([e.latlng.lat,e.latlng.lng]);rebuild();});
+  let ghost=null;
+  hit.on('mousedown',e=>{
+    if(freeMode||abMode||wps.length<2||!rpts.length)return;
+    if(e.originalEvent)L.DomEvent.stopPropagation(e.originalEvent);
+    let k=0,bd=1e12;rpts.forEach((r,i)=>{const d=dist([e.latlng.lat,e.latlng.lng],r);if(d<bd){bd=d;k=i;}});
+    dragVia={j:viaInsertIndex(wps,rpts,k),ll:e.latlng,moved:false,from:e.latlng};
+    map.dragging.disable();
+    ghost=L.circleMarker(e.latlng,{radius:9,color:'#fff',weight:3,fillColor:'#1565c0',fillOpacity:1}).addTo(map);
+  });
+  map.on('mousemove',e=>{
+    if(!dragVia)return;
+    dragVia.ll=e.latlng;ghost.setLatLng(e.latlng);
+    if(dist([e.latlng.lat,e.latlng.lng],[dragVia.from.lat,dragVia.from.lng])>6)dragVia.moved=true;
+    const pv=wps.map(p=>[p[0],p[1]]);pv.splice(dragVia.j,0,[e.latlng.lat,e.latlng.lng]);rline.setLatLngs(pv);
+  });
+  document.addEventListener('mouseup',()=>{
+    if(!dragVia)return;
+    const d=dragVia;dragVia=null;if(ghost){map.removeLayer(ghost);ghost=null;}
+    if(!freeMode)map.dragging.enable();
+    if(d.moved){wps.splice(d.j,0,[d.ll.lat,d.ll.lng]);$('st').textContent='Route reshaped. Departure and arrival unchanged.';}
+    rebuild();
+  });
   function setMode(m){
-    adding=m==='points';freeMode=m==='draw';
-    $('rAdd').textContent=adding?'Done adding':'Add route points';$('rAdd').className=adding?'main':'';
+    adding=m==='points';freeMode=m==='draw';abMode=m==='ab';
+    $('rAB').textContent=abMode?'Cancel':'Set departure & arrival';$('rAB').className=abMode?'main':'';
+    $('rAdd').textContent=adding?'Done extending':'Extend route';$('rAdd').className=adding?'main':'';
     $('rFree').textContent=freeMode?'Done drawing':'Draw freehand';$('rFree').className=freeMode?'main':'';
     map.getContainer().style.cursor=m?'crosshair':'';
     if(freeMode)map.dragging.disable();else map.dragging.enable();
-    if(adding)$('st').textContent='Click the map to add route points in order.';
+    if(adding)$('st').textContent='Click the map to extend the route. Each click becomes the new arrival.';
     if(freeMode)$('st').textContent='Hold the mouse button and drag on the map to draw the route.';
   }
   $('rAdd').onclick=()=>setMode(adding?null:'points');
+  $('rAB').onclick=()=>{
+    if(abMode){setMode(null);return;}
+    if(wps.length>1&&!confirm('Replace the current route with a new departure and arrival?'))return;
+    wps=[];rebuild();setMode('ab');
+    $('st').textContent='Pick the departure point: click the map, or search a place and pick it.';
+  };
   $('rFree').onclick=()=>setMode(freeMode?null:'draw');
   map.on('mousedown',e=>{if(!freeMode)return;drawing=true;wps.push([e.latlng.lat,e.latlng.lng,1]);});
   map.on('mousemove',e=>{if(!drawing)return;const l=wps[wps.length-1],p=[e.latlng.lat,e.latlng.lng,1];
@@ -907,6 +983,7 @@ function laptop(){
     if(pin)map.removeLayer(pin);
     pin=L.circleMarker([lat,lon],{radius:8,color:'#fff',weight:3,fillColor:'#f08c00',fillOpacity:1}).bindTooltip(label,{permanent:true,direction:'top'}).addTo(map);
     lastFit=Date.now()+15000;map.flyTo([lat,lon],17);$('qres').textContent='';
+    if(abMode)addAB(lat,lon);
   }
   async function getJSON(u){const r=await fetch(u);return r.json();}
   async function doSearch(){
@@ -992,7 +1069,7 @@ function phone(auto){
   let name=LS.get('lt_name','');$('pname').value=name;
   let pts=LS.get('lt_pts',[]).filter(validPt),route=LS.get('lt_route',[]).filter(validPt);
   let code=null,conn=null,peer=null,linked=false,watch=null,tracking=!!LS.get('lt_track',0),live=false,dirty=false,rt=null,wl=null;
-  let pm=null,rl=null,trail=null,me=null,firstFix=true,cur=null,curAcc=0,gotHello=false,col='#0a7d4f',total=0,turns=[],cum=[],voice=LS.get('lt_voice',1)!==0,spoken={},offSaid=false;
+  let pm=null,rl=null,trail=null,me=null,firstFix=true,cur=null,curAcc=0,gotHello=false,col='#0a7d4f',total=0,ends=null,etaInfo=null,turns=[],cum=[],voice=LS.get('lt_voice',1)!==0,spoken={},offSaid=false;
   for(let i=1;i<pts.length;i++)total+=dist(pts[i-1],pts[i]);
   if(!window.isSecureContext)$('pst').textContent='This page is not https, so GPS will be blocked. Open the hosted https link on the phone, not a local file.';
   const setSt=t=>{$('pst').textContent=t;};
@@ -1008,12 +1085,13 @@ function phone(auto){
     L.tileLayer(ESRI,{maxZoom:19,attribution:'Tiles © Esri'}).addTo(pm);
     rl=L.polyline(route,{color:'#1565c0',weight:6,dashArray:'8 8'}).addTo(pm);
     trail=L.polyline(pts.map(p=>[p[0],p[1]]),{color:col,weight:5}).addTo(pm);
+    drawEnds();
     $('pd').textContent=fmtD(total);$('pn').textContent=pts.length;setBtn();setLink();
     setTimeout(()=>{pm.invalidateSize();const b=pts.length?trail.getBounds():(route.length>1?rl.getBounds():null);if(b&&b.isValid())pm.fitBounds(b,{padding:[30,30],maxZoom:17});},150);
     if(route.length>1)$('gtxt').textContent='Saved route loaded.';
   }
   function setRoute(a){
-    route=a;LS.set('lt_route',a);rl.setLatLngs(a);computeTurns();spoken={};offSaid=false;
+    route=a;etaInfo=null;showEtaPh();LS.set('lt_route',a);rl.setLatLngs(a);drawEnds();computeTurns();spoken={};offSaid=false;
     if(a.length>1){pm.fitBounds(rl.getBounds(),{padding:[30,30]});firstFix=true;
       let len=0;for(let i=0;i<a.length-1;i++)len+=dist(a[i],a[i+1]);
       $('grem').textContent=fmtD(len)+' route';
@@ -1027,6 +1105,16 @@ function phone(auto){
     try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang='en-GB';
       u.onerror=e=>{if(e.error==='not-allowed')setSt('Sound is blocked until you tap the screen once.');};
       speechSynthesis.speak(u);}catch(e){}
+  }
+  function drawEnds(){
+    if(!pm)return;
+    if(ends)ends.clearLayers();else ends=L.layerGroup().addTo(pm);
+    if(route.length<2)return;
+    [[route[0],'#2b8a3e','Departure'],[route[route.length-1],'#c92a2a','Arrival']].forEach(x=>
+      L.circleMarker(x[0],{radius:9,color:'#fff',weight:3,fillColor:x[1],fillOpacity:1}).bindTooltip(x[2]).addTo(ends));
+  }
+  function showEtaPh(){
+    $('geta').textContent=etaInfo?'Whole route: walk '+fmtT(etaInfo.w)+(etaInfo.we?' (estimate)':'')+(etaInfo.c!=null?'  ·  car '+fmtT(etaInfo.c):''):'';
   }
   function setVoiceBtn(){$('bVoice').textContent='Voice directions: '+(voice?'on':'off');$('bVoice').className=voice?'main':'';}
   function computeTurns(){
@@ -1052,7 +1140,7 @@ function phone(auto){
     if(rem<20){$('grem').textContent='Arrived';$('gtxt').textContent='You are at the end of the route.';ar.style.visibility='hidden';
       if(!spoken.end){spoken.end=1;say('You have arrived.');}return;}
     let ti=bi,sum=0;while(ti<route.length-1&&sum<30){sum+=dist(route[ti],route[ti+1]);ti++;}
-    $('grem').textContent=fmtD(rem)+' left';
+    $('grem').textContent=fmtD(rem)+' left'+(etaInfo&&cum[cum.length-1]>0?' · '+fmtT(rem/cum[cum.length-1]*etaInfo.w)+' walking':'');
     if(bd>40){
       const b=bearing(pt,route[bi]);ar.style.transform='rotate('+b+'deg)';
       $('gtxt').textContent='Off route by '+Math.round(bd)+' m. Go '+compass(b)+' to rejoin.';
@@ -1101,6 +1189,7 @@ function phone(auto){
   function onData(m){
     if(!m)return;
     if(m.type==='hello'){gotHello=true;return;}
+    if(m.type==='eta'){etaInfo=m.info&&typeof m.info==='object'&&isFinite(m.info.w)?m.info:null;showEtaPh();if(cur)guide(cur,curAcc);return;}
     if(m.type==='route'&&Array.isArray(m.pts)){setRoute(m.pts.filter(validPt).map(r=>[+r[0],+r[1]]));return;}
     if(m.type==='ack'){if(m.color){col=m.color;trail.setStyle({color:col});if(me)me.setStyle({fillColor:col});}sendBatch(m.have|0);}
   }
