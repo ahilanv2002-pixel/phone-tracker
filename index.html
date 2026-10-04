@@ -727,7 +727,7 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
     <input id="pname" maxlength="20" placeholder="Phone name (optional)" autocomplete="off">
     <input id="code" maxlength="6" placeholder="CODE" autocomplete="off">
     <button class="main" id="bConn">Connect</button>
-    <button id="bGo" class="hide main">Start recording</button><button id="bReset" class="hide">End session and clear</button>
+    <button id="bGo" class="hide main">Start recording</button><button id="bVoice" class="hide">Voice directions: on</button><button id="bReset" class="hide">End session and clear</button>
     <div class="stats" style="justify-content:center;margin-top:8px">
       <div><b id="pd">0 m</b><span>Distance</span></div>
       <div><b id="pa">–</b><span>Accuracy</span></div>
@@ -992,7 +992,7 @@ function phone(auto){
   let name=LS.get('lt_name','');$('pname').value=name;
   let pts=LS.get('lt_pts',[]).filter(validPt),route=LS.get('lt_route',[]).filter(validPt);
   let code=null,conn=null,peer=null,linked=false,watch=null,tracking=!!LS.get('lt_track',0),live=false,dirty=false,rt=null,wl=null;
-  let pm=null,rl=null,trail=null,me=null,firstFix=true,cur=null,curAcc=0,gotHello=false,col='#0a7d4f',total=0;
+  let pm=null,rl=null,trail=null,me=null,firstFix=true,cur=null,curAcc=0,gotHello=false,col='#0a7d4f',total=0,turns=[],cum=[],voice=LS.get('lt_voice',1)!==0,spoken={},offSaid=false;
   for(let i=1;i<pts.length;i++)total+=dist(pts[i-1],pts[i]);
   if(!window.isSecureContext)$('pst').textContent='This page is not https, so GPS will be blocked. Open the hosted https link on the phone, not a local file.';
   const setSt=t=>{$('pst').textContent=t;};
@@ -1003,7 +1003,7 @@ function phone(auto){
   function goLive(){
     if(live)return;live=true;
     $('phone').classList.add('live');$('pmap').classList.remove('hide');$('guide').classList.remove('hide');
-    ['pname','code','bConn'].forEach(i=>$(i).classList.add('hide'));$('bGo').classList.remove('hide');$('bReset').classList.remove('hide');
+    ['pname','code','bConn'].forEach(i=>$(i).classList.add('hide'));$('bGo').classList.remove('hide');$('bReset').classList.remove('hide');$('bVoice').classList.remove('hide');setVoiceBtn();computeTurns();
     pm=L.map('pmap',{zoomControl:false}).setView([20,0],2);
     L.tileLayer(ESRI,{maxZoom:19,attribution:'Tiles © Esri'}).addTo(pm);
     rl=L.polyline(route,{color:'#1565c0',weight:6,dashArray:'8 8'}).addTo(pm);
@@ -1013,28 +1013,66 @@ function phone(auto){
     if(route.length>1)$('gtxt').textContent='Saved route loaded.';
   }
   function setRoute(a){
-    route=a;LS.set('lt_route',a);rl.setLatLngs(a);
+    route=a;LS.set('lt_route',a);rl.setLatLngs(a);computeTurns();spoken={};offSaid=false;
     if(a.length>1){pm.fitBounds(rl.getBounds(),{padding:[30,30]});firstFix=true;
       let len=0;for(let i=0;i<a.length-1;i++)len+=dist(a[i],a[i+1]);
       $('grem').textContent=fmtD(len)+' route';
-      $('gtxt').textContent=watch!==null?'New route received.':'Route received. Tap Start recording for guidance.';}
+      $('gtxt').textContent=watch!==null?'New route received.':'Route received. Tap Start recording for guidance.';say('New route received.');}
     else{$('grem').textContent='–';$('gtxt').textContent='Waiting for a route';$('arrow').style.visibility='hidden';}
     if(cur)guide(cur,curAcc);
   }
+  /* ----- voice + turns ----- */
+  function say(t){
+    if(!voice||!('speechSynthesis' in window))return;
+    try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang='en-GB';
+      u.onerror=e=>{if(e.error==='not-allowed')setSt('Sound is blocked until you tap the screen once.');};
+      speechSynthesis.speak(u);}catch(e){}
+  }
+  function setVoiceBtn(){$('bVoice').textContent='Voice directions: '+(voice?'on':'off');$('bVoice').className=voice?'main':'';}
+  function computeTurns(){
+    cum=[0];for(let i=1;i<route.length;i++)cum.push(cum[i-1]+dist(route[i-1],route[i]));
+    turns=[];if(route.length<4)return;
+    const at=(i,d)=>{let j=i;if(d<0){while(j>0&&cum[i]-cum[j]<-d)j--;}else{while(j<route.length-1&&cum[j]-cum[i]<d)j++;}return j;};
+    const raw=[];
+    for(let i=1;i<route.length-1;i++){
+      const a=at(i,-30),b=at(i,30);if(a===i||b===i)continue;
+      let d=bearing(route[i],route[b])-bearing(route[a],route[i]);d=((d+540)%360)-180;
+      if(Math.abs(d)>=40)raw.push({i,d});
+    }
+    const cl=[];
+    raw.forEach(r=>{const l=cl[cl.length-1];if(l&&cum[r.i]-cum[l.i]<40){if(Math.abs(r.d)>Math.abs(l.d))cl[cl.length-1]=r;}else cl.push(r);});
+    turns=cl.map(r=>{const dir=r.d>0?'right':'left',x=Math.abs(r.d);
+      return{i:r.i,pos:cum[r.i],txt:x>=150?'make a U-turn':x>=110?'turn sharp '+dir:x>=60?'turn '+dir:'bear '+dir};});
+  }
   function guide(pt,ac){
-    if(route.length<2)return;
+    if(route.length<2||cum.length!==route.length)return;
     let bi=0,bd=1e12;route.forEach((r,i)=>{const d=dist(pt,r);if(d<bd){bd=d;bi=i;}});
-    let rem=0;for(let i=bi;i<route.length-1;i++)rem+=dist(route[i],route[i+1]);
+    const rem=cum[cum.length-1]-cum[bi];
     const ar=$('arrow');ar.style.visibility='visible';
-    if(rem<20){$('grem').textContent='Arrived';$('gtxt').textContent='You are at the end of the route.';ar.style.visibility='hidden';return;}
+    if(rem<20){$('grem').textContent='Arrived';$('gtxt').textContent='You are at the end of the route.';ar.style.visibility='hidden';
+      if(!spoken.end){spoken.end=1;say('You have arrived.');}return;}
     let ti=bi,sum=0;while(ti<route.length-1&&sum<30){sum+=dist(route[ti],route[ti+1]);ti++;}
     $('grem').textContent=fmtD(rem)+' left';
-    if(bd>40){const b=bearing(pt,route[bi]);ar.style.transform='rotate('+b+'deg)';
-      $('gtxt').textContent='Off route by '+Math.round(bd)+' m. Go '+compass(b)+' to rejoin.';}
-    else{const b=bearing(pt,route[ti]);ar.style.transform='rotate('+b+'deg)';
-      $('gtxt').textContent='On route. Head '+compass(b)+'.';}
+    if(bd>40){
+      const b=bearing(pt,route[bi]);ar.style.transform='rotate('+b+'deg)';
+      $('gtxt').textContent='Off route by '+Math.round(bd)+' m. Go '+compass(b)+' to rejoin.';
+      if(!offSaid&&ac<=100){offSaid=true;say('You are off route. Go '+compass(b)+' to rejoin.');}
+    }else{
+      const b=bearing(pt,route[ti]);ar.style.transform='rotate('+b+'deg)';
+      const here=cum[bi],nt=turns.find(t=>t.pos>here+3),dn=nt?nt.pos-here:0;
+      $('gtxt').textContent='On route. '+(nt?'Next: '+nt.txt+' in '+fmtD(dn)+'.':'Head '+compass(b)+'.');
+      if(offSaid){offSaid=false;say('Back on route.');}
+      else if(!spoken.start){spoken.start=1;say('Follow the route. Head '+compass(b)+'.');}
+      else if(nt&&ac<=50){
+        const k=String(nt.i);
+        if(dn<=20&&!spoken[k+'n']){spoken[k+'n']=spoken[k+'a']=spoken[k+'b']=1;say(nt.txt.charAt(0).toUpperCase()+nt.txt.slice(1)+' now.');}
+        else if(dn<=45&&!spoken[k+'a']){spoken[k+'a']=spoken[k+'b']=1;say('In '+(Math.round(dn/5)*5)+' metres, '+nt.txt+'.');}
+        else if(dn<=120&&!spoken[k+'b']){spoken[k+'b']=1;say('In '+(Math.round(dn/10)*10)+' metres, '+nt.txt+'.');}
+      }
+    }
     if(ac>50)$('gtxt').textContent+=' (GPS ±'+Math.round(ac)+' m, approximate)';
   }
+  $('bVoice').onclick=()=>{voice=!voice;LS.set('lt_voice',voice?1:0);setVoiceBtn();if(voice)say('Voice directions on.');};
 
   /* ----- link to laptop, with automatic retry ----- */
   function retry(){if(rt)return;rt=setTimeout(()=>{rt=null;connect();},5000);}
@@ -1107,7 +1145,7 @@ function phone(auto){
     save();setBtn();if(user)setSt('Recording stopped. '+pts.length+' points saved on this phone.');
   }
   document.addEventListener('visibilitychange',()=>{if(document.hidden)save();else if(tracking&&live)start();});
-  $('bGo').onclick=()=>{if(watch!==null)stop(true);else start();};
+  $('bGo').onclick=()=>{if(watch!==null)stop(true);else{start();say('Recording started.');}};
   $('bReset').onclick=()=>{
     if(!confirm('End this session and delete the recorded path on this phone?'))return;
     try{if(conn&&conn.open)conn.send({type:'reset'});}catch(e){}
