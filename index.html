@@ -707,6 +707,7 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 #pname,#qA,#qB{text-transform:none;letter-spacing:0}
 #qA,#qB{text-align:left;margin:0;flex:1;min-width:0}
 .srow{display:flex;gap:6px;margin-bottom:6px}.srow button{width:auto;margin:0;padding:8px 12px}
+.modes{display:flex;gap:6px;margin:4px 0 8px}.modes button{width:auto;margin:0;padding:8px 18px}
 .abrow{display:flex;gap:8px;align-items:center}.abcol{flex:1;min-width:0}
 #swapAB{width:auto;margin:0;padding:8px 12px;font-size:20px}
 .abdot{width:14px;height:14px;border-radius:50%;flex:none}.abdot.a{background:#2b8a3e}.abdot.b{background:#c92a2a}
@@ -749,6 +750,7 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 <div class="bar hide" id="lapbar">
   <div style="margin-bottom:8px">Code: <code id="myCode">…</code></div>
   <div id="eta" style="font-weight:600;margin:4px 0"></div>
+  <div class="modes"><button id="mWalk">Walk</button><button id="mCar">Car</button></div>
   <div class="abrow"><div class="abcol">
     <div class="srow"><span class="abdot a"></span><input id="qA" placeholder="Choose starting point (UK street or postcode)" autocomplete="off"><button class="main" id="gA">Search</button><button id="mA" title="Click a point on the map">Map</button></div>
     <div class="qres" id="qresA"></div>
@@ -756,7 +758,7 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
     <div class="qres" id="qresB"></div>
   </div><button id="swapAB" title="Swap departure and arrival">&#8645;</button></div>
   <div id="legend">No phones yet.</div>
-  <div class="rbtns"><button id="rAB">Set departure &amp; arrival</button><button id="rAdd">Extend route</button><button id="rFree">Draw freehand</button><button id="rUndo">Undo</button><button id="rClr">Clear route</button><label><input type="checkbox" id="rSnap" checked>Follow walking paths</label><label><input type="checkbox" id="rFit" checked>Auto-zoom</label><button id="rAll">Fit all</button><button id="rNew">New session</button></div>
+  <div class="rbtns"><button id="rAB">Set departure &amp; arrival</button><button id="rAdd">Extend route</button><button id="rFree">Draw freehand</button><button id="rUndo">Undo</button><button id="rClr">Clear route</button><label id="rSnapLbl"><input type="checkbox" id="rSnap" checked>Follow walking paths</label><label><input type="checkbox" id="rFit" checked>Auto-zoom</label><button id="rAll">Fit all</button><button id="rNew">New session</button></div>
   <div id="st">Starting…</div>
 </div>
 
@@ -821,7 +823,7 @@ function laptop(){
   const rline=L.polyline([],{color:'#1565c0',weight:5,dashArray:'8 8'}).addTo(map);
   const hit=L.polyline([],{color:'#000',weight:22,opacity:0,className:'hitline'}).addTo(map);
   const wpLayer=L.layerGroup().addTo(map);
-  let pin=null,pendB=null,pendMk=null,pickT=null,routeMsg=null,etaMsg=null,wps=LS.get('lt_wps',[]),adding=false,abMode=false,freeMode=false,drawing=false,dragVia=null,rpts=[],rtk=0,lastFit=0,dirty=false;
+  let routeMode=LS.get('lt_mode','walk')==='car'?'car':'walk',pin=null,pendB=null,pendMk=null,pickT=null,routeMsg=null,etaMsg=null,wps=LS.get('lt_wps',[]),adding=false,abMode=false,freeMode=false,drawing=false,dragVia=null,rpts=[],rtk=0,lastFit=0,dirty=false;
   const phones={};
 
   /* ----- phones ----- */
@@ -892,15 +894,28 @@ function laptop(){
     const hasFree=wps.some(p=>p[2]);
     let pts=wps.map(p=>[p[0],p[1]]);
     const key=wps.filter((p,i)=>!p[2]||i===0||i===wps.length-1).map(p=>[p[0],p[1]]);
-    const carP=key.length>1?routeInfo('car',key).catch(()=>null):Promise.resolve(null);
+    const carMode=routeMode==='car';
+    const footFull=!carMode&&$('rSnap').checked&&wps.length>1&&!hasFree;
+    const carP=key.length>1?routeInfo('car',key,carMode).catch(()=>null):Promise.resolve(null);
+    const footP=key.length>1?routeInfo('foot',footFull?wps.map(p=>[p[0],p[1]]):key,footFull).catch(()=>null):Promise.resolve(null);
     let walk=null;
-    if($('rSnap').checked&&wps.length>1&&!hasFree){
-      try{
-        const rt=await routeInfo('foot',wps.map(p=>[p[0],p[1]]));
-        if(tk!==rtk)return;
-        if(rt){pts=rt.geometry.coordinates.map(c=>[c[1],c[0]]);walk=rt.duration;}
+    if(carMode){
+      const cr=await carP;if(tk!==rtk)return;
+      if(!cr||!cr.geometry){
+        $('st').textContent=key.length>1?'No drivable route found, or the road service is unavailable. Try placing the points on roads.':'';
+        routeMsg=null;etaMsg=null;rpts=[];rline.setLatLngs([]);hit.setLatLngs([]);showEta(null);
+        Object.values(phones).forEach(P=>{if(P.conn&&P.conn.open)P.conn.send({type:'route',pts:[]});});
+        return;
+      }
+      pts=cr.geometry.coordinates.map(c=>[c[1],c[0]]);
+      const f=await footP;if(tk!==rtk)return;walk=f?f.duration:null;
+      if(hasFree)$('st').textContent='Freehand lines cannot follow roads. The car route uses your departure, arrival and via points only.';
+    }else{
+      const f=await footP;if(tk!==rtk)return;
+      if(footFull){
+        if(f&&f.geometry){pts=f.geometry.coordinates.map(c=>[c[1],c[0]]);walk=f.duration;}
         else $('st').textContent='No walking path found. Using straight lines.';
-      }catch(e){if(tk!==rtk)return;$('st').textContent='Path service unavailable. Using straight lines.';}
+      }
     }
     const rp=densify(pts);rpts=rp;rline.setLatLngs(rp);hit.setLatLngs(rp);
     etaMsg=null;routeMsg={type:'route',pts:rp.map(p=>[+p[0].toFixed(6),+p[1].toFixed(6)])};
@@ -910,18 +925,18 @@ function laptop(){
     $('eta').textContent='Calculating times…';
     let len=0;for(let i=1;i<rp.length;i++)len+=dist(rp[i-1],rp[i]);
     const car=await carP;if(tk!==rtk)return;
-    const info={d:Math.round(len),w:Math.round(walk!=null?walk:len/1.39),we:walk==null,c:car?Math.round(car.duration):null,cd:car?Math.round(car.distance):null};
+    const info={mode:routeMode,d:Math.round(len),w:Math.round(walk!=null?walk:len/1.39),we:walk==null,c:car?Math.round(car.duration):null,cd:car?Math.round(car.distance):null};
     showEta(info);etaMsg={type:'eta',info};
     Object.values(phones).forEach(P=>{if(P.conn&&P.conn.open)P.conn.send(etaMsg);});
   }
-  async function routeInfo(profile,pts){
+  async function routeInfo(profile,pts,full){
     const car=profile==='car',q=pts.map(p=>p[1]+','+p[0]).join(';');
-    const r=await fetch('https://routing.openstreetmap.de/routed-'+(car?'car':'foot')+'/route/v1/'+(car?'driving':'foot')+'/'+q+'?overview='+(car?'false':'full')+'&geometries=geojson');
+    const r=await fetch('https://routing.openstreetmap.de/routed-'+(car?'car':'foot')+'/route/v1/'+(car?'driving':'foot')+'/'+q+'?overview='+(full?'full':'false')+'&geometries=geojson');
     const j=await r.json();return j.routes&&j.routes[0]?j.routes[0]:null;
   }
   function showEta(info){
     if(!info){$('eta').textContent='';etaMsg=null;Object.values(phones).forEach(P=>{if(P.conn&&P.conn.open)P.conn.send({type:'eta',info:null});});return;}
-    $('eta').textContent='Route '+fmtD(info.d)+'  ·  Walk '+fmtT(info.w)+(info.we?' (estimate)':'')+'  ·  Car '+(info.c!=null?fmtT(info.c)+' ('+fmtD(info.cd)+' by road)':'not available');
+    $('eta').textContent='Route '+(info.mode==='car'?'by car ':'on foot ')+fmtD(info.d)+'  ·  Walk '+fmtT(info.w)+(info.we?' (estimate)':'')+'  ·  Car '+(info.c!=null?fmtT(info.c)+' ('+fmtD(info.cd)+' by road)':'not available');
   }
   function addAB(lat,lng){
     if(wps.length>=2)return;
@@ -985,6 +1000,16 @@ function laptop(){
   $('rAll').onclick=()=>fitAll(true);
   $('rNew').onclick=()=>{if(!confirm('Start a new session? This deletes all recorded paths, the route and the current code.'))return;
     ['lt_lap_code','lt_phones','lt_wps','lt_labels'].forEach(LS.del);location.reload();};
+  function applyModeUI(){
+    const car=routeMode==='car';
+    $('mCar').className=car?'main':'';$('mWalk').className=car?'':'main';
+    $('rSnapLbl').classList.toggle('hide',car);
+    rline.setStyle({color:car?'#d9480f':'#1565c0'});
+  }
+  function setRouteMode(m){routeMode=m;LS.set('lt_mode',m);applyModeUI();rebuild();}
+  $('mWalk').onclick=()=>{if(routeMode!=='walk')setRouteMode('walk');};
+  $('mCar').onclick=()=>{if(routeMode!=='car')setRouteMode('car');};
+  applyModeUI();
   if(wps.length)rebuild();
 
   /* ----- departure and arrival search (UK) ----- */
@@ -1169,7 +1194,7 @@ function phone(auto){
       L.circleMarker(x[0],{radius:9,color:'#fff',weight:3,fillColor:x[1],fillOpacity:1}).bindTooltip(x[2]).addTo(ends));
   }
   function showEtaPh(){
-    $('geta').textContent=etaInfo?'Whole route: walk '+fmtT(etaInfo.w)+(etaInfo.we?' (estimate)':'')+(etaInfo.c!=null?'  ·  car '+fmtT(etaInfo.c):''):'';
+    $('geta').textContent=etaInfo?'Walk '+fmtT(etaInfo.w)+(etaInfo.we?' (estimate)':'')+(etaInfo.c!=null?'  ·  Car '+fmtT(etaInfo.c):'')+'  ·  guiding the '+(etaInfo.mode==='car'?'car':'walking')+' route':'';
   }
   function setVoiceBtn(){$('bVoice').textContent='Voice directions: '+(voice?'on':'off');$('bVoice').className=voice?'main':'';}
   function computeTurns(){
@@ -1195,7 +1220,7 @@ function phone(auto){
     if(rem<20){$('grem').textContent='Arrived';$('gtxt').textContent='You are at the end of the route.';ar.style.visibility='hidden';
       if(!spoken.end){spoken.end=1;say('You have arrived.');}return;}
     let ti=bi,sum=0;while(ti<route.length-1&&sum<30){sum+=dist(route[ti],route[ti+1]);ti++;}
-    $('grem').textContent=fmtD(rem)+' left'+(etaInfo&&cum[cum.length-1]>0?' · '+fmtT(rem/cum[cum.length-1]*etaInfo.w)+' walking':'');
+    $('grem').textContent=fmtD(rem)+' left'+(etaInfo&&cum[cum.length-1]>0?' · '+fmtT(rem/cum[cum.length-1]*(etaInfo.mode==='car'&&etaInfo.c!=null?etaInfo.c:etaInfo.w))+(etaInfo.mode==='car'?' driving':' walking'):'');
     if(bd>40){
       const b=bearing(pt,route[bi]);ar.style.transform='rotate('+b+'deg)';
       $('gtxt').textContent='Off route by '+Math.round(bd)+' m. Go '+compass(b)+' to rejoin.';
@@ -1207,10 +1232,10 @@ function phone(auto){
       if(offSaid){offSaid=false;say('Back on route.');}
       else if(!spoken.start){spoken.start=1;say('Follow the route. Head '+compass(b)+'.');}
       else if(nt&&ac<=50){
-        const k=String(nt.i);
-        if(dn<=20&&!spoken[k+'n']){spoken[k+'n']=spoken[k+'a']=spoken[k+'b']=1;say(nt.txt.charAt(0).toUpperCase()+nt.txt.slice(1)+' now.');}
-        else if(dn<=45&&!spoken[k+'a']){spoken[k+'a']=spoken[k+'b']=1;say('In '+(Math.round(dn/5)*5)+' metres, '+nt.txt+'.');}
-        else if(dn<=120&&!spoken[k+'b']){spoken[k+'b']=1;say('In '+(Math.round(dn/10)*10)+' metres, '+nt.txt+'.');}
+        const k=String(nt.i),drv=etaInfo&&etaInfo.mode==='car',fz=drv?300:120,nz=drv?100:45,nw=drv?35:20;
+        if(dn<=nw&&!spoken[k+'n']){spoken[k+'n']=spoken[k+'a']=spoken[k+'b']=1;say(nt.txt.charAt(0).toUpperCase()+nt.txt.slice(1)+' now.');}
+        else if(dn<=nz&&!spoken[k+'a']){spoken[k+'a']=spoken[k+'b']=1;say('In '+(Math.round(dn/5)*5)+' metres, '+nt.txt+'.');}
+        else if(dn<=fz&&!spoken[k+'b']){spoken[k+'b']=1;say('In '+(Math.round(dn/10)*10)+' metres, '+nt.txt+'.');}
       }
     }
     if(ac>50)$('gtxt').textContent+=' (GPS ±'+Math.round(ac)+' m, approximate)';
