@@ -704,11 +704,15 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 .wpd{background:#1565c0;border:3px solid #fff;border-radius:50%;box-shadow:0 0 4px rgba(0,0,0,.5);color:#fff;font:700 14px/22px system-ui,sans-serif;text-align:center;cursor:move}
 .wpA{background:#2b8a3e}.wpB{background:#c92a2a}
 .hitline{cursor:grab}
-#pname,#q{text-transform:none;letter-spacing:0}
-#q{text-align:left;margin:0;flex:1}
-.srow{display:flex;gap:6px;margin-bottom:6px}.srow button{width:auto;margin:0;padding:8px 14px}
-#qres{max-height:130px;overflow:auto}
-#qres div{padding:7px 8px;border-bottom:1px solid #e3e9e4;cursor:pointer;font-size:14px}
+#pname,#qA,#qB{text-transform:none;letter-spacing:0}
+#qA,#qB{text-align:left;margin:0;flex:1;min-width:0}
+.srow{display:flex;gap:6px;margin-bottom:6px}.srow button{width:auto;margin:0;padding:8px 12px}
+.abrow{display:flex;gap:8px;align-items:center}.abcol{flex:1;min-width:0}
+#swapAB{width:auto;margin:0;padding:8px 12px;font-size:20px}
+.abdot{width:14px;height:14px;border-radius:50%;flex:none}.abdot.a{background:#2b8a3e}.abdot.b{background:#c92a2a}
+#lapbar{max-height:48vh;overflow:auto}
+.qres{max-height:130px;overflow:auto}
+.qres div{padding:7px 8px;border-bottom:1px solid #e3e9e4;cursor:pointer;font-size:14px}
 </style>
 </head>
 <body>
@@ -745,8 +749,12 @@ code{font-size:22px;font-weight:700;letter-spacing:.2em}
 <div class="bar hide" id="lapbar">
   <div style="margin-bottom:8px">Code: <code id="myCode">…</code></div>
   <div id="eta" style="font-weight:600;margin:4px 0"></div>
-  <div class="srow"><input id="q" placeholder="Search UK street or postcode" autocomplete="off"><button class="main" id="qGo">Search</button></div>
-  <div id="qres"></div>
+  <div class="abrow"><div class="abcol">
+    <div class="srow"><span class="abdot a"></span><input id="qA" placeholder="Choose starting point (UK street or postcode)" autocomplete="off"><button class="main" id="gA">Search</button><button id="mA" title="Click a point on the map">Map</button></div>
+    <div class="qres" id="qresA"></div>
+    <div class="srow"><span class="abdot b"></span><input id="qB" placeholder="Choose destination (UK street or postcode)" autocomplete="off"><button class="main" id="gB">Search</button><button id="mB" title="Click a point on the map">Map</button></div>
+    <div class="qres" id="qresB"></div>
+  </div><button id="swapAB" title="Swap departure and arrival">&#8645;</button></div>
   <div id="legend">No phones yet.</div>
   <div class="rbtns"><button id="rAB">Set departure &amp; arrival</button><button id="rAdd">Extend route</button><button id="rFree">Draw freehand</button><button id="rUndo">Undo</button><button id="rClr">Clear route</button><label><input type="checkbox" id="rSnap" checked>Follow walking paths</label><label><input type="checkbox" id="rFit" checked>Auto-zoom</label><button id="rAll">Fit all</button><button id="rNew">New session</button></div>
   <div id="st">Starting…</div>
@@ -813,7 +821,7 @@ function laptop(){
   const rline=L.polyline([],{color:'#1565c0',weight:5,dashArray:'8 8'}).addTo(map);
   const hit=L.polyline([],{color:'#000',weight:22,opacity:0,className:'hitline'}).addTo(map);
   const wpLayer=L.layerGroup().addTo(map);
-  let routeMsg=null,etaMsg=null,wps=LS.get('lt_wps',[]),adding=false,abMode=false,freeMode=false,drawing=false,dragVia=null,rpts=[],rtk=0,lastFit=0,dirty=false;
+  let pin=null,pendB=null,pendMk=null,pickT=null,routeMsg=null,etaMsg=null,wps=LS.get('lt_wps',[]),adding=false,abMode=false,freeMode=false,drawing=false,dragVia=null,rpts=[],rtk=0,lastFit=0,dirty=false;
   const phones={};
 
   /* ----- phones ----- */
@@ -878,7 +886,7 @@ function laptop(){
       const ic=L.divIcon({className:'wpd'+(isA?' wpA':isB?' wpB':''),html:isA?'A':isB?'B':'',iconSize:isA||isB?[28,28]:[18,18]});
       const mk=L.marker([p[0],p[1]],{icon:ic,draggable:true,zIndexOffset:isA||isB?1000:500}).addTo(wpLayer);
       mk.bindTooltip(isA?'Departure':isB?'Arrival':'Via point. Drag to move, right-click to remove.',{direction:'top',offset:[0,-10]});
-      mk.on('dragend',()=>{const ll=mk.getLatLng();wps[i]=[ll.lat,ll.lng];rebuild();});
+      mk.on('dragend',()=>{const ll=mk.getLatLng();wps[i]=[ll.lat,ll.lng];if(isA)setLabel('A',ll);else if(isB)setLabel('B',ll);rebuild();});
       if(!isA&&!isB){mk.on('contextmenu',()=>{wps.splice(i,1);rebuild();});mk.on('dblclick',ev=>{L.DomEvent.stop(ev);wps.splice(i,1);rebuild();});}
     });
     const hasFree=wps.some(p=>p[2]);
@@ -917,12 +925,14 @@ function laptop(){
   }
   function addAB(lat,lng){
     if(wps.length>=2)return;
-    wps.push([lat,lng]);
+    wps.push([lat,lng]);setLabel(wps.length===1?'A':'B',{lat:lat,lng:lng});
     $('st').textContent=wps.length===2?'Route created. Drag the line to reshape it. A and B stay in place.':'Now pick the arrival point (click the map or search and pick a place).';
     if(wps.length===2)setMode(null);
     rebuild();
   }
   map.on('click',e=>{
+    if(pickT){const w=pickT;pickT=null;map.getContainer().style.cursor='';
+      setEnd(w,e.latlng.lat,e.latlng.lng,'Point on map ('+e.latlng.lat.toFixed(5)+', '+e.latlng.lng.toFixed(5)+')');return;}
     if(abMode){addAB(e.latlng.lat,e.latlng.lng);return;}
     if(!adding)return;wps.push([e.latlng.lat,e.latlng.lng]);rebuild();});
   let ghost=null;
@@ -948,7 +958,7 @@ function laptop(){
     rebuild();
   });
   function setMode(m){
-    adding=m==='points';freeMode=m==='draw';abMode=m==='ab';
+    pickT=null;adding=m==='points';freeMode=m==='draw';abMode=m==='ab';
     $('rAB').textContent=abMode?'Cancel':'Set departure & arrival';$('rAB').className=abMode?'main':'';
     $('rAdd').textContent=adding?'Done extending':'Extend route';$('rAdd').className=adding?'main':'';
     $('rFree').textContent=freeMode?'Done drawing':'Draw freehand';$('rFree').className=freeMode?'main':'';
@@ -961,7 +971,7 @@ function laptop(){
   $('rAB').onclick=()=>{
     if(abMode){setMode(null);return;}
     if(wps.length>1&&!confirm('Replace the current route with a new departure and arrival?'))return;
-    wps=[];rebuild();setMode('ab');
+    wps=[];clearEnds();rebuild();setMode('ab');
     $('st').textContent='Pick the departure point: click the map, or search a place and pick it.';
   };
   $('rFree').onclick=()=>setMode(freeMode?null:'draw');
@@ -970,25 +980,43 @@ function laptop(){
     if(dist(l,p)<8)return;wps.push(p);rline.addLatLng([p[0],p[1]]);});
   document.addEventListener('mouseup',()=>{if(!drawing)return;drawing=false;rebuild();});
   $('rUndo').onclick=()=>{if(wps.length&&wps[wps.length-1][2]){while(wps.length&&wps[wps.length-1][2])wps.pop();}else wps.pop();rebuild();};
-  $('rClr').onclick=()=>{wps=[];rebuild();};
+  $('rClr').onclick=()=>{wps=[];clearEnds();rebuild();};
   $('rSnap').onchange=()=>rebuild();
   $('rAll').onclick=()=>fitAll(true);
   $('rNew').onclick=()=>{if(!confirm('Start a new session? This deletes all recorded paths, the route and the current code.'))return;
-    ['lt_lap_code','lt_phones','lt_wps'].forEach(LS.del);location.reload();};
+    ['lt_lap_code','lt_phones','lt_wps','lt_labels'].forEach(LS.del);location.reload();};
   if(wps.length)rebuild();
 
-  /* ----- UK street / postcode search ----- */
-  let pin=null;
-  function goTo(lat,lon,label){
-    if(pin)map.removeLayer(pin);
-    pin=L.circleMarker([lat,lon],{radius:8,color:'#fff',weight:3,fillColor:'#f08c00',fillOpacity:1}).bindTooltip(label,{permanent:true,direction:'top'}).addTo(map);
-    lastFit=Date.now()+15000;map.flyTo([lat,lon],17);$('qres').textContent='';
-    if(abMode)addAB(lat,lon);
+  /* ----- departure and arrival search (UK) ----- */
+  let labels=LS.get('lt_labels',{a:'',b:''});
+  $('qA').value=labels.a||'';$('qB').value=labels.b||'';
+  const saveLabels=()=>LS.set('lt_labels',labels);
+  function fly(lat,lon){lastFit=Date.now()+15000;map.flyTo([lat,lon],16);}
+  function clearPend(){pendB=null;if(pendMk){map.removeLayer(pendMk);pendMk=null;}}
+  function showPend(){if(pendMk)map.removeLayer(pendMk);
+    pendMk=L.marker(pendB,{icon:L.divIcon({className:'wpd wpB',html:'B',iconSize:[28,28]}),interactive:false}).addTo(map);}
+  function setLabel(w,ll){const t='Point on map ('+ll.lat.toFixed(5)+', '+ll.lng.toFixed(5)+')';
+    labels[w==='A'?'a':'b']=t;$(w==='A'?'qA':'qB').value=t;saveLabels();}
+  function clearEnds(){clearPend();labels={a:'',b:''};$('qA').value='';$('qB').value='';saveLabels();}
+  function setEnd(which,lat,lon,label){
+    const p=[lat,lon];
+    if(which==='A'){
+      if(wps.length)wps[0]=p;else wps.push(p);
+      if(pendB&&wps.length===1){wps.push(pendB);clearPend();}
+      labels.a=label;$('qA').value=label;
+    }else{
+      if(wps.length>=2)wps[wps.length-1]=p;
+      else if(wps.length===1)wps.push(p);
+      else{pendB=p;showPend();}
+      if(wps.length>=2)clearPend();
+      labels.b=label;$('qB').value=label;
+    }
+    saveLabels();fly(lat,lon);
+    $('st').textContent=wps.length>=2?'Route updated. Drag the line to reshape it.':(which==='A'?'Departure set. Now choose the destination.':'Destination set. Now choose the starting point.');
+    rebuild();
   }
   async function getJSON(u){const r=await fetch(u);return r.json();}
-  async function doSearch(){
-    const q=$('q').value.trim(),res=$('qres');if(!q)return;
-    res.textContent='Searching…';
+  async function findPlaces(q){
     const pc=q.toUpperCase().replace(/\s+/g,'');let items=[];
     try{
       if(/^[A-Z]{1,2}\d[A-Z\d]?\d[A-Z]{2}$/.test(pc)){
@@ -1014,13 +1042,40 @@ function laptop(){
         j.forEach(x=>items.push({label:x.display_name,lat:+x.lat,lon:+x.lon}));
       }catch(e){}
     }
-    res.textContent='';
-    if(!items.length){res.textContent='No UK match. Try adding the town, for example "High Street, Leeds", or a full postcode.';return;}
-    if(items.length===1){goTo(items[0].lat,items[0].lon,items[0].label);return;}
-    items.forEach(it=>{const d=document.createElement('div');d.textContent=it.label;d.onclick=()=>goTo(it.lat,it.lon,it.label);res.append(d);});
+    return items;
   }
-  $('qGo').onclick=doSearch;
-  $('q').addEventListener('keydown',e=>{if(e.key==='Enter')doSearch();});
+  function bindSearch(which,inp,res,goBtn){
+    let t=null;
+    async function run(explicit){
+      const q=inp.value.trim();
+      if(q.length<2){res.textContent='';return;}
+      res.textContent='Searching…';
+      const items=await findPlaces(q);
+      if(inp.value.trim()!==q)return;
+      res.textContent='';
+      if(!items.length){res.textContent='No UK match. Add the town, for example "High Street, Leeds", or use a full postcode.';return;}
+      if(explicit&&items.length===1){setEnd(which,items[0].lat,items[0].lon,items[0].label);return;}
+      items.forEach(it=>{const d=document.createElement('div');d.textContent=it.label;
+        d.onclick=()=>{res.textContent='';setEnd(which,it.lat,it.lon,it.label);};res.append(d);});
+    }
+    inp.addEventListener('input',()=>{clearTimeout(t);t=setTimeout(()=>run(false),700);});
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter'){clearTimeout(t);run(true);}});
+    goBtn.onclick=()=>{clearTimeout(t);run(true);};
+  }
+  bindSearch('A',$('qA'),$('qresA'),$('gA'));
+  bindSearch('B',$('qB'),$('qresB'),$('gB'));
+  function pickOnMap(w){
+    const same=pickT===w;setMode(null);pickT=same?null:w;
+    map.getContainer().style.cursor=pickT?'crosshair':'';
+    $('st').textContent=pickT?'Click the map to set the '+(w==='A'?'departure':'arrival')+' point.':'';
+  }
+  $('mA').onclick=()=>pickOnMap('A');$('mB').onclick=()=>pickOnMap('B');
+  $('swapAB').onclick=()=>{
+    if(wps.length>=2)wps.reverse();
+    else if(wps.length===1){pendB=[wps[0][0],wps[0][1]];wps=[];showPend();}
+    else if(pendB){const pb=pendB;clearPend();wps=[pb];}
+    const t=labels.a;labels.a=labels.b;labels.b=t;$('qA').value=labels.a||'';$('qB').value=labels.b||'';saveLabels();rebuild();
+  };
 
   /* ----- connection (same code for 24 h) ----- */
   let ses=LS.get('lt_lap_code',null);
